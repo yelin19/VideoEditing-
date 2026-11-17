@@ -11,7 +11,6 @@ import android.graphics.Color as AndroidColor
 import android.graphics.ImageDecoder
 import android.graphics.Paint
 import android.graphics.RectF
-import android.graphics.Matrix
 import android.graphics.Movie
 import android.net.Uri
 import android.os.Bundle
@@ -134,37 +133,38 @@ private fun EditorScreen() {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Background).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp)) {
-        Text("VIDEO STUDIO", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Spacer(Modifier.height(7.dp))
-        Text("Make it yours.", color = Color.White, fontSize = 29.sp, fontWeight = FontWeight.Bold)
-        Text("Edit in 9:16, preview, then export to your gallery.", color = Color(0xFFA7ACBC), fontSize = 13.sp)
-        Spacer(Modifier.height(18.dp))
-
-        Box(Modifier.fillMaxWidth().aspectRatio(9f / 16f).clip(RoundedCornerShape(22.dp)).background(Color(0xFF08090D)).border(1.dp, Color(0xFF303443), RoundedCornerShape(22.dp))) {
-            if (videoUri != null) VideoPreview(videoUri!!, mirror, zoom, Modifier.fillMaxSize())
-            if (videoUri == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.Movie, null, tint = Color(0xFF73798C), modifier = Modifier.size(44.dp))
-                Spacer(Modifier.height(10.dp)); Text("Your 9:16 video preview", color = Color(0xFFA7ACBC))
+    Column(Modifier.fillMaxSize().background(Background).padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("VIDEO STUDIO", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Text("Make it yours.", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
             }
-            if (warmEnabled && videoUri != null) {
-                Box(Modifier.fillMaxSize().background(Color(0xFFFF9F4C).copy(alpha = warmAmount * .22f)))
-            }
-            if (blurEnabled && videoUri != null) InteractiveBlurBox(blurRect, blurStrength, Modifier.fillMaxSize(), onChange = { blurRect = it })
-            savedLogo?.let { file ->
-                val isGif = file.extension.equals("gif", ignoreCase = true)
-                val bitmap = remember(file.absolutePath) { if (isGif) null else decodeLogoPreview(file)?.asImageBitmap() }
-                val animatedDrawable = remember(file.absolutePath) {
-                    if (!isGif) null else runCatching {
-                        ImageDecoder.decodeDrawable(ImageDecoder.createSource(file)) as? android.graphics.drawable.AnimatedImageDrawable
-                    }.getOrNull()
+            Text("Preview stays visible", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(4.dp))
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1.05f)) {
+            val previewWidth = minOf(maxWidth, maxHeight * 9f / 16f)
+            Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D)).border(1.dp, Color(0xFF303443), RoundedCornerShape(18.dp))) {
+                if (videoUri != null) VideoPreview(videoUri!!, mirror, zoom, Modifier.fillMaxSize())
+                if (videoUri == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Movie, null, tint = Color(0xFF73798C), modifier = Modifier.size(36.dp))
+                    Spacer(Modifier.height(8.dp)); Text("Your 9:16 video preview", color = Color(0xFFA7ACBC), fontSize = 12.sp)
                 }
-                DisposableEffect(animatedDrawable) {
-                    animatedDrawable?.apply { repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE; start() }
-                    onDispose { animatedDrawable?.stop() }
-                }
-                if (bitmap != null || animatedDrawable != null) {
-                    DraggableLogo(bitmap, animatedDrawable, logoPosition, logoScale, Modifier.fillMaxSize(), onMove = { next ->
+                if (warmEnabled && videoUri != null) Box(Modifier.fillMaxSize().background(Color(0xFFFF9F4C).copy(alpha = warmAmount * .48f)))
+                if (blurEnabled && videoUri != null) InteractiveBlurBox(blurRect, blurStrength, Modifier.fillMaxSize(), onChange = { blurRect = it })
+                savedLogo?.let { file ->
+                    val isGif = file.extension.equals("gif", ignoreCase = true)
+                    val bitmap = remember(file.absolutePath) { if (isGif) null else decodeLogoPreview(file)?.asImageBitmap() }
+                    val animatedDrawable = remember(file.absolutePath) {
+                        if (!isGif) null else runCatching {
+                            ImageDecoder.decodeDrawable(ImageDecoder.createSource(file)) as? android.graphics.drawable.AnimatedImageDrawable
+                        }.getOrNull()
+                    }
+                    DisposableEffect(animatedDrawable) {
+                        animatedDrawable?.apply { repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE; start() }
+                        onDispose { animatedDrawable?.stop() }
+                    }
+                    if (bitmap != null || animatedDrawable != null) DraggableLogo(bitmap, animatedDrawable, logoPosition, logoScale, Modifier.fillMaxSize(), onMove = { next ->
                         logoPosition = next
                         prefs.edit().putFloat("logo_x", next.x).putFloat("logo_y", next.y).apply()
                     }, onScale = { next ->
@@ -172,15 +172,15 @@ private fun EditorScreen() {
                         prefs.edit().putFloat("logo_scale", next).apply()
                     })
                 }
+                if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(7.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, fontSize = 8.sp)
             }
-            if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(9.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 8.dp, vertical = 5.dp), color = Color.White, fontSize = 9.sp)
         }
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(15.dp)) {
+        Spacer(Modifier.height(5.dp))
+        Button(onClick = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }, modifier = Modifier.fillMaxWidth().height(42.dp), shape = RoundedCornerShape(13.dp)) {
             Icon(Icons.Default.Movie, null); Spacer(Modifier.width(8.dp)); Text(if (videoUri == null) "Choose a video" else "Change video", fontWeight = FontWeight.SemiBold)
         }
-        Spacer(Modifier.height(17.dp))
-
+        Spacer(Modifier.height(6.dp))
+        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) {
         SectionTitle("VIDEO")
         SettingSwitch("Mirror horizontally", "Flip the frame left-to-right", mirror) { mirror = it }
         Text("Slight zoom · ${"%.2f".format(zoom)}×", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
@@ -291,6 +291,7 @@ private fun EditorScreen() {
         Spacer(Modifier.height(18.dp))
         Text("Output: 1080 × 1920 MP4 · Movies/VideoEditing", color = Color(0xFF858BA0), fontSize = 11.sp)
         Spacer(Modifier.height(24.dp))
+        }
     }
     message?.let { text -> AlertDialog(onDismissRequest = { message = null }, confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } }, title = { Text(if (text.startsWith("Video exported")) "Export complete" else "Notice") }, text = { Text(text) }) }
 }
@@ -439,6 +440,7 @@ private fun VideoPreview(uri: Uri, mirror: Boolean, zoom: Float, modifier: Modif
                 this.player = player
                 scaleX = 1f
                 scaleY = 1f
+                applyVideoTextureTransform(this, mirror, zoom)
                 post { applyVideoTextureTransform(this, mirror, zoom) }
             }
         },
@@ -446,6 +448,7 @@ private fun VideoPreview(uri: Uri, mirror: Boolean, zoom: Float, modifier: Modif
             view.player = player
             view.scaleX = 1f
             view.scaleY = 1f
+            applyVideoTextureTransform(view, mirror, zoom)
             view.post { applyVideoTextureTransform(view, mirror, zoom) }
         }
     )
@@ -453,18 +456,15 @@ private fun VideoPreview(uri: Uri, mirror: Boolean, zoom: Float, modifier: Modif
 
 private fun applyVideoTextureTransform(playerView: PlayerView, mirror: Boolean, zoom: Float) {
     val videoTexture = playerView.videoSurfaceView as? TextureView ?: return
-    if (videoTexture.width <= 0 || videoTexture.height <= 0) return
-    val transform = Matrix().apply {
-        setScale(if (mirror) -zoom else zoom, zoom, videoTexture.width / 2f, videoTexture.height / 2f)
-    }
-    videoTexture.setTransform(transform)
+    videoTexture.scaleX = if (mirror) -zoom else zoom
+    videoTexture.scaleY = zoom
 }
 
 private fun fullFrameOverlaySettings(): OverlaySettings = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, 0f).setOverlayFrameAnchor(0f, 0f).setScale(1f, 1f).build()
 
 private fun makeWarmOverlay(intensity: Float): Bitmap {
     val bitmap = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
-    Canvas(bitmap).drawColor(AndroidColor.argb((intensity.coerceIn(0f, 1f) * 62).roundToInt(), 255, 159, 76))
+    Canvas(bitmap).drawColor(AndroidColor.argb((intensity.coerceIn(0f, 1f) * 128).roundToInt(), 255, 159, 76))
     return bitmap
 }
 
