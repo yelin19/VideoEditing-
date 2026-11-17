@@ -53,6 +53,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.Player
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.OverlayEffect
@@ -74,7 +78,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -108,6 +114,9 @@ private fun EditorScreen() {
     var warmEnabled by remember { mutableStateOf(true) }
     var warmAmount by remember { mutableFloatStateOf(.30f) }
     var muteOriginal by remember { mutableStateOf(true) }
+    var videoAudioVolume by remember { mutableFloatStateOf(.8f) }
+    var replacementAudioEnabled by remember { mutableStateOf(true) }
+    var replacementAudioVolume by remember { mutableFloatStateOf(.9f) }
     var blurEnabled by remember { mutableStateOf(true) }
     var blurRect by remember { mutableStateOf(BlurRect()) }
     var blurStrength by remember { mutableFloatStateOf(.92f) }
@@ -127,7 +136,10 @@ private fun EditorScreen() {
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
                 if (uri != null) { videoUri = uri; blurRect = BlurRect() }
     }
-    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> audioUri = uri }
+    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        audioUri = uri
+        if (uri != null) replacementAudioEnabled = true
+    }
 
     LaunchedEffect(exporting, activeTransformer) {
         while (isActive && exporting) {
@@ -152,7 +164,7 @@ private fun EditorScreen() {
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1.05f)) {
             val previewWidth = minOf(maxWidth, maxHeight * 9f / 16f)
             Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D)).border(1.dp, Color(0xFF303443), RoundedCornerShape(18.dp))) {
-                if (videoUri != null) VideoPreview(videoUri!!, mirror, zoom, Modifier.fillMaxSize())
+                if (videoUri != null) VideoPreview(videoUri!!, audioUri, mirror, zoom, muteOriginal, videoAudioVolume, replacementAudioEnabled, replacementAudioVolume, Modifier.fillMaxSize())
                 if (videoUri == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.Movie, null, tint = Color(0xFF73798C), modifier = Modifier.size(36.dp))
                     Spacer(Modifier.height(8.dp)); Text("Your 9:16 video preview", color = Color(0xFFA7ACBC), fontSize = 12.sp)
@@ -208,13 +220,20 @@ private fun EditorScreen() {
         Spacer(Modifier.height(10.dp))
 
         SectionTitle("AUDIO")
-        SettingSwitch("Mute original audio", "Recommended when replacing the soundtrack", muteOriginal) { muteOriginal = it }
+        SettingSwitch("Play original video audio", "Enable to hear it together with added audio", !muteOriginal) { muteOriginal = !it }
+        Text("Video volume · ${(videoAudioVolume * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+        Slider(value = videoAudioVolume, onValueChange = { videoAudioVolume = it }, valueRange = 0f..1f)
         OutlinedButton(onClick = { audioPicker.launch(arrayOf("audio/mpeg", "audio/mp4", "audio/wav", "audio/x-wav", "audio/*")) }, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(14.dp)) {
             Text(if (audioUri == null) "Add replacement audio" else "Change replacement audio")
         }
         if (audioUri != null) Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Replacement audio selected (loops to video length)", Modifier.weight(1f), color = Color(0xFF9EA5B6), fontSize = 12.sp)
+            Text("Replacement audio selected", Modifier.weight(1f), color = Color(0xFF9EA5B6), fontSize = 12.sp)
             TextButton(onClick = { audioUri = null }) { Text("Remove") }
+        }
+        if (audioUri != null) {
+            SettingSwitch("Play added audio", "Mix with video sound when both are enabled", replacementAudioEnabled) { replacementAudioEnabled = it }
+            Text("Added audio volume · ${(replacementAudioVolume * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = replacementAudioVolume, onValueChange = { replacementAudioVolume = it }, valueRange = 0f..1f)
         }
 
         Spacer(Modifier.height(14.dp))
@@ -265,11 +284,14 @@ private fun EditorScreen() {
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
-                        .setRemoveAudio(muteOriginal || audioUri != null)
-                        .setEffects(Effects(emptyList(), outputEffects)).build()
+                        .setRemoveAudio(muteOriginal)
+                        .setEffects(Effects(if (muteOriginal) emptyList() else listOf(GainAudioProcessor(videoAudioVolume)), outputEffects)).build()
                     val videoSequence = EditedMediaItemSequence.Builder(videoEdited).build()
-                    val composition = if (audioUri != null) {
-                        val audioEdited = EditedMediaItem.Builder(MediaItem.fromUri(audioUri!!)).setRemoveVideo(true).build()
+                    val composition = if (audioUri != null && replacementAudioEnabled) {
+                        val audioEdited = EditedMediaItem.Builder(MediaItem.fromUri(audioUri!!))
+                            .setRemoveVideo(true)
+                            .setEffects(Effects(listOf(GainAudioProcessor(replacementAudioVolume)), emptyList()))
+                            .build()
                         Composition.Builder(videoSequence, EditedMediaItemSequence.Builder(audioEdited).setIsLooping(true).build()).build()
                     } else Composition.Builder(videoSequence).build()
                     progress = 0f
@@ -442,10 +464,59 @@ private fun DraggableLogo(
 }
 
 @Composable
-private fun VideoPreview(uri: Uri, mirror: Boolean, zoom: Float, modifier: Modifier = Modifier) {
+private fun VideoPreview(
+    uri: Uri,
+    replacementAudioUri: Uri?,
+    mirror: Boolean,
+    zoom: Float,
+    muteVideoAudio: Boolean,
+    videoAudioVolume: Float,
+    replacementAudioEnabled: Boolean,
+    replacementAudioVolume: Float,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
-    val player = remember(uri) { ExoPlayer.Builder(context).build().apply { setMediaItem(MediaItem.fromUri(uri)); prepare(); playWhenReady = false } }
+    val player = remember(uri) {
+        ExoPlayer.Builder(context).build().apply {
+            setAudioAttributes(AudioAttributes.DEFAULT, false)
+            setMediaItem(MediaItem.fromUri(uri))
+            prepare()
+            playWhenReady = false
+        }
+    }
+    val audioPlayer = remember(replacementAudioUri) {
+        replacementAudioUri?.let { audioUri ->
+            ExoPlayer.Builder(context).build().apply {
+                setAudioAttributes(AudioAttributes.DEFAULT, false)
+                repeatMode = Player.REPEAT_MODE_ONE
+                setMediaItem(MediaItem.fromUri(audioUri))
+                prepare()
+                playWhenReady = false
+            }
+        }
+    }
     DisposableEffect(player) { onDispose { player.release() } }
+    DisposableEffect(audioPlayer) { onDispose { audioPlayer?.release() } }
+    SideEffect {
+        player.volume = if (muteVideoAudio) 0f else videoAudioVolume.coerceIn(0f, 1f)
+        audioPlayer?.volume = if (replacementAudioEnabled) replacementAudioVolume.coerceIn(0f, 1f) else 0f
+    }
+    LaunchedEffect(player, audioPlayer, replacementAudioEnabled) {
+        while (isActive) {
+            val addedPlayer = audioPlayer
+            if (addedPlayer != null) {
+                if (replacementAudioEnabled && player.isPlaying) {
+                    val duration = addedPlayer.duration
+                    val targetPosition = if (duration > 0) player.currentPosition % duration else player.currentPosition
+                    if (abs(addedPlayer.currentPosition - targetPosition) > 500L) addedPlayer.seekTo(targetPosition)
+                    if (!addedPlayer.isPlaying) addedPlayer.play()
+                } else if (addedPlayer.isPlaying || addedPlayer.playWhenReady) {
+                    addedPlayer.pause()
+                }
+            }
+            delay(250)
+        }
+    }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -550,6 +621,35 @@ private fun makeBlurCoverOverlay(rect: BlurRect, strength: Float): Bitmap {
     val left = rect.x.coerceIn(0f, 1f) * OUTPUT_WIDTH; val top = rect.y.coerceIn(0f, 1f) * OUTPUT_HEIGHT
     canvas.drawRoundRect(RectF(left, top, left + rect.w.coerceIn(.05f, 1f) * OUTPUT_WIDTH, top + rect.h.coerceIn(.03f, 1f) * OUTPUT_HEIGHT), 12f, 12f, paint)
     return output
+}
+
+private class GainAudioProcessor(private val gain: Float) : BaseAudioProcessor() {
+    private val safeGain = gain.coerceIn(0f, 1f)
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        if (inputAudioFormat.encoding != androidx.media3.common.C.ENCODING_PCM_16BIT &&
+            inputAudioFormat.encoding != androidx.media3.common.C.ENCODING_PCM_FLOAT
+        ) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        }
+        return inputAudioFormat
+    }
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val outputBuffer = replaceOutputBuffer(inputBuffer.remaining())
+        when (inputAudioFormat.encoding) {
+            androidx.media3.common.C.ENCODING_PCM_16BIT -> while (inputBuffer.remaining() >= 2) {
+                val sample = inputBuffer.short.toInt()
+                outputBuffer.putShort((sample * safeGain).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort())
+            }
+            androidx.media3.common.C.ENCODING_PCM_FLOAT -> while (inputBuffer.remaining() >= 4) {
+                val sample = inputBuffer.float
+                outputBuffer.putFloat((sample * safeGain).coerceIn(-1f, 1f))
+            }
+        }
+        inputBuffer.position(inputBuffer.limit())
+        outputBuffer.flip()
+    }
 }
 
 private fun saveToGallery(context: Context, source: File): Uri {

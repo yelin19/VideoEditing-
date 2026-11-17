@@ -9,7 +9,7 @@ Native Android video editor built with Kotlin, Jetpack Compose and AndroidX Medi
 - Horizontal mirror and adjustable slight zoom. Preview transforms apply to the video texture only, keeping player controls and time labels unmirrored.
 - Adjustable warm color tint (default 30%); color, zoom and mirror preview updates apply while paused, without requiring playback.
 - Custom PNG/JPG/GIF logo selection through Photo Picker. The image is copied into app-private `filesDir/custom-logo`, its path is saved in `SharedPreferences`, and it reloads on app startup. GIFs animate in the editor preview and are driven by the output timestamps during export, looping automatically for the full video duration. Drag the logo directly on the preview to reposition it; use the corner grip or size slider to resize it. Its saved position and size are used in export. A reset action is available.
-- Optional original-audio muting (enabled by default) and replacement audio selection. Replacement audio is looped/cut to the video timeline by Media3 composition.
+- Preview plays the selected added audio in sync with the video, loops it to the video length, and follows video play/pause and seeks. Separate switches and volume sliders control the original video sound and added audio. If both are enabled, both are mixed in preview and in the exported video.
 - Draggable/resizable subtitle cover box with expanded movement range, a corner resize grip and adjustable cover strength. Preview coordinates are shared with the 720×1280 export.
 
 ## Important limitation
