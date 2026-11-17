@@ -8,14 +8,17 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
+import android.graphics.ImageDecoder
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Matrix
+import android.graphics.Movie
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.LayoutInflater
 import android.view.TextureView
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -113,7 +116,7 @@ private fun EditorScreen() {
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) runCatching {
             saveLogoPermanently(context, uri).also { prefs.edit().putString("custom_logo_path", it.absolutePath).apply(); savedLogo = it }
-        }.onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG or JPG." }
+        }.onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG, JPG, or GIF." }
     }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
                 if (uri != null) { videoUri = uri; blurRect = BlurRect() }
@@ -149,9 +152,19 @@ private fun EditorScreen() {
             }
             if (blurEnabled && videoUri != null) InteractiveBlurBox(blurRect, blurStrength, Modifier.fillMaxSize(), onChange = { blurRect = it })
             savedLogo?.let { file ->
-                val bitmap = remember(file.absolutePath) { decodeLogoPreview(file)?.asImageBitmap() }
-                bitmap?.let {
-                    DraggableLogo(it, logoPosition, logoScale, Modifier.fillMaxSize(), onMove = { next ->
+                val isGif = file.extension.equals("gif", ignoreCase = true)
+                val bitmap = remember(file.absolutePath) { if (isGif) null else decodeLogoPreview(file)?.asImageBitmap() }
+                val animatedDrawable = remember(file.absolutePath) {
+                    if (!isGif) null else runCatching {
+                        ImageDecoder.decodeDrawable(ImageDecoder.createSource(file)) as? android.graphics.drawable.AnimatedImageDrawable
+                    }.getOrNull()
+                }
+                DisposableEffect(animatedDrawable) {
+                    animatedDrawable?.apply { repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE; start() }
+                    onDispose { animatedDrawable?.stop() }
+                }
+                if (bitmap != null || animatedDrawable != null) {
+                    DraggableLogo(bitmap, animatedDrawable, logoPosition, logoScale, Modifier.fillMaxSize(), onMove = { next ->
                         logoPosition = next
                         prefs.edit().putFloat("logo_x", next.x).putFloat("logo_y", next.y).apply()
                     }, onScale = { next ->
@@ -216,6 +229,7 @@ private fun EditorScreen() {
         OutlinedButton(onClick = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(14.dp)) {
             Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(7.dp)); Text(if (savedLogo == null) "Choose Logo" else "Change Logo")
         }
+        Text("PNG/JPG are still images. GIF logos animate and loop throughout the exported video.", color = Color(0xFF858BA0), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
         if (savedLogo != null) TextButton(onClick = {
             logoPosition = LogoPosition()
             logoScale = 1f
@@ -240,7 +254,7 @@ private fun EditorScreen() {
                         add(Presentation.createForWidthAndHeight(1080, 1920, Presentation.LAYOUT_SCALE_TO_FIT))
                         add(ScaleAndRotateTransformation.Builder().setScale(if (mirror) -zoom else zoom, zoom).build())
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
-                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeLogoOverlay(it, logoPosition, logoScale), fullFrameOverlaySettings())))) }
+                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
@@ -347,7 +361,8 @@ private fun InteractiveBlurBox(rect: BlurRect, blurStrength: Float, modifier: Mo
 
 @Composable
 private fun DraggableLogo(
-    bitmap: androidx.compose.ui.graphics.ImageBitmap,
+    bitmap: androidx.compose.ui.graphics.ImageBitmap?,
+    animatedDrawable: android.graphics.drawable.AnimatedImageDrawable?,
     position: LogoPosition,
     scale: Float,
     modifier: Modifier,
@@ -387,7 +402,15 @@ private fun DraggableLogo(
                 },
             contentAlignment = Alignment.Center
         ) {
-            androidx.compose.foundation.Image(bitmap, "Drag to move logo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            if (bitmap != null) {
+                androidx.compose.foundation.Image(bitmap, "Drag to move logo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            } else if (animatedDrawable != null) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { viewContext -> ImageView(viewContext).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setImageDrawable(animatedDrawable) } },
+                    update = { imageView -> if (imageView.drawable !== animatedDrawable) imageView.setImageDrawable(animatedDrawable) }
+                )
+            }
             Box(
                 Modifier.align(Alignment.BottomEnd).size(28.dp).background(Accent.copy(alpha = .96f), RoundedCornerShape(topStart = 8.dp))
                     .pointerInput(parentWidth, parentHeight) {
@@ -462,6 +485,50 @@ private fun makeLogoOverlay(file: File, position: LogoPosition, scale: Float): B
     return output
 }
 
+private fun createLogoOverlay(file: File, position: LogoPosition, scale: Float): BitmapOverlay {
+    return if (file.extension.equals("gif", ignoreCase = true)) {
+        LoopingGifBitmapOverlay(file, position, scale)
+    } else {
+        BitmapOverlay.createStaticBitmapOverlay(makeLogoOverlay(file, position, scale), fullFrameOverlaySettings())
+    }
+}
+
+private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosition, scale: Float) : BitmapOverlay() {
+    private val movie = Movie.decodeFile(file.absolutePath) ?: error("This GIF could not be decoded")
+    private val durationMs = movie.duration().coerceAtLeast(100)
+    private val maxWidth = 1080f * .22f * scale.coerceIn(.4f, 2.2f)
+    private val maxHeight = 1920f * .12f * scale.coerceIn(.4f, 2.2f)
+    private val bitmapScale = minOf(maxWidth / movie.width().coerceAtLeast(1), maxHeight / movie.height().coerceAtLeast(1), 1f)
+    private val frameWidth = (movie.width() * bitmapScale).roundToInt().coerceAtLeast(1)
+    private val frameHeight = (movie.height() * bitmapScale).roundToInt().coerceAtLeast(1)
+    private val frameBitmap = Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888)
+    private val canvas = Canvas(frameBitmap)
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val timeMs = ((presentationTimeUs.coerceAtLeast(0L) / 1_000L) % durationMs).toInt()
+        movie.setTime(timeMs)
+        frameBitmap.eraseColor(AndroidColor.TRANSPARENT)
+        canvas.save()
+        canvas.scale(frameWidth / movie.width().toFloat(), frameHeight / movie.height().toFloat())
+        movie.draw(canvas, 0f, 0f)
+        canvas.restore()
+        return frameBitmap
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
+        val halfWidth = maxWidth / 2f / 1080f
+        val halfHeight = maxHeight / 2f / 1920f
+        val x = position.x.coerceIn(halfWidth, 1f - halfWidth) * 2f - 1f
+        val y = 1f - position.y.coerceIn(halfHeight, 1f - halfHeight) * 2f
+        val preservePixelAspect = frameWidth * 1920f / (frameHeight * 1080f)
+        return OverlaySettings.Builder()
+            .setBackgroundFrameAnchor(x, y)
+            .setOverlayFrameAnchor(0f, 0f)
+            .setScale(preservePixelAspect, 1f)
+            .build()
+    }
+}
+
 private fun makeBlurCoverOverlay(rect: BlurRect, strength: Float): Bitmap {
     val output = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
@@ -511,9 +578,10 @@ private fun saveLogoPermanently(context: Context, uri: Uri): File {
     val extension = when (mime) {
         "image/png" -> ".png"
         "image/jpeg", "image/jpg" -> ".jpg"
+        "image/gif" -> ".gif"
         else -> {
             val name = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-            when (name?.substringAfterLast('.', "")?.lowercase()) { "png" -> ".png"; "jpg", "jpeg" -> ".jpg"; else -> error("Choose a PNG or JPG image") }
+            when (name?.substringAfterLast('.', "")?.lowercase()) { "png" -> ".png"; "jpg", "jpeg" -> ".jpg"; "gif" -> ".gif"; else -> error("Choose a PNG, JPG, or GIF image") }
         }
     }
     val directory = File(context.filesDir, "custom-logo").apply { mkdirs() }
