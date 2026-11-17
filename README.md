@@ -6,9 +6,9 @@ Native Android video editor built with Kotlin, Jetpack Compose and AndroidX Medi
 
 - Import and preview a video in a vertical 9:16 editor canvas.
 - Export an H.264/MP4 at 1080×1920 using Media3 Transformer and save it to `Movies/VideoEditing` through `MediaStore`; export progress and completion feedback are shown in the app.
-- Horizontal mirror and adjustable slight zoom.
+- Horizontal mirror and adjustable slight zoom. Preview transforms apply to the video texture only, keeping player controls and time labels unmirrored.
 - Adjustable warm color tint (default 30%).
-- Custom PNG/JPG logo selection through Photo Picker. The image is copied into app-private `filesDir/custom-logo`, its path is saved in `SharedPreferences`, and it reloads on app startup. Drag the logo directly on the preview to reposition it; its coordinates are saved and used by export. A reset-position action is available.
+- Custom PNG/JPG logo selection through Photo Picker. The image is copied into app-private `filesDir/custom-logo`, its path is saved in `SharedPreferences`, and it reloads on app startup. Drag the logo directly on the preview to reposition it; use the corner grip or size slider to resize it. Its saved position and size are used in export. A reset action is available.
 - Optional original-audio muting (enabled by default) and replacement audio selection. Replacement audio is looped/cut to the video timeline by Media3 composition.
 - Draggable/resizable subtitle cover box with expanded movement range, a corner resize grip and adjustable cover strength. Preview coordinates are shared with the 1080×1920 export.
 

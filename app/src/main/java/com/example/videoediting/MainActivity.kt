@@ -10,10 +10,12 @@ import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.LayoutInflater
+import android.view.TextureView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -101,6 +103,7 @@ private fun EditorScreen() {
     var blurRect by remember { mutableStateOf(BlurRect()) }
     var blurStrength by remember { mutableFloatStateOf(.92f) }
     var logoPosition by remember { mutableStateOf(LogoPosition(prefs.getFloat("logo_x", .86f), prefs.getFloat("logo_y", .92f))) }
+    var logoScale by remember { mutableFloatStateOf(prefs.getFloat("logo_scale", 1f).coerceIn(.4f, 2.2f)) }
     var message by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -147,10 +150,15 @@ private fun EditorScreen() {
             if (blurEnabled && videoUri != null) InteractiveBlurBox(blurRect, blurStrength, Modifier.fillMaxSize(), onChange = { blurRect = it })
             savedLogo?.let { file ->
                 val bitmap = remember(file.absolutePath) { decodeLogoPreview(file)?.asImageBitmap() }
-                bitmap?.let { DraggableLogo(it, logoPosition, Modifier.fillMaxSize()) { next ->
-                    logoPosition = next
-                    prefs.edit().putFloat("logo_x", next.x).putFloat("logo_y", next.y).apply()
-                } }
+                bitmap?.let {
+                    DraggableLogo(it, logoPosition, logoScale, Modifier.fillMaxSize(), onMove = { next ->
+                        logoPosition = next
+                        prefs.edit().putFloat("logo_x", next.x).putFloat("logo_y", next.y).apply()
+                    }, onScale = { next ->
+                        logoScale = next
+                        prefs.edit().putFloat("logo_scale", next).apply()
+                    })
+                }
             }
             if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(9.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 8.dp, vertical = 5.dp), color = Color.White, fontSize = 9.sp)
         }
@@ -210,8 +218,13 @@ private fun EditorScreen() {
         }
         if (savedLogo != null) TextButton(onClick = {
             logoPosition = LogoPosition()
-            prefs.edit().putFloat("logo_x", logoPosition.x).putFloat("logo_y", logoPosition.y).apply()
+            logoScale = 1f
+            prefs.edit().putFloat("logo_x", logoPosition.x).putFloat("logo_y", logoPosition.y).putFloat("logo_scale", 1f).apply()
         }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Reset logo position") }
+        if (savedLogo != null) {
+            Text("Logo size · ${(logoScale * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = logoScale, onValueChange = { logoScale = it; prefs.edit().putFloat("logo_scale", it).apply() }, valueRange = .4f..2.2f)
+        }
         if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Remove Logo", color = Color(0xFFCF9DA6)) }
 
         Spacer(Modifier.height(16.dp))
@@ -227,7 +240,7 @@ private fun EditorScreen() {
                         add(Presentation.createForWidthAndHeight(1080, 1920, Presentation.LAYOUT_SCALE_TO_FIT))
                         add(ScaleAndRotateTransformation.Builder().setScale(if (mirror) -zoom else zoom, zoom).build())
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
-                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeLogoOverlay(it, logoPosition), fullFrameOverlaySettings())))) }
+                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeLogoOverlay(it, logoPosition, logoScale), fullFrameOverlaySettings())))) }
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
@@ -333,15 +346,28 @@ private fun InteractiveBlurBox(rect: BlurRect, blurStrength: Float, modifier: Mo
 }
 
 @Composable
-private fun DraggableLogo(bitmap: androidx.compose.ui.graphics.ImageBitmap, position: LogoPosition, modifier: Modifier, onChange: (LogoPosition) -> Unit) {
+private fun DraggableLogo(
+    bitmap: androidx.compose.ui.graphics.ImageBitmap,
+    position: LogoPosition,
+    scale: Float,
+    modifier: Modifier,
+    onMove: (LogoPosition) -> Unit,
+    onScale: (Float) -> Unit
+) {
     val latestPosition = rememberUpdatedState(position)
-    val latestOnChange = rememberUpdatedState(onChange)
+    val latestScale = rememberUpdatedState(scale)
+    val latestOnMove = rememberUpdatedState(onMove)
+    val latestOnScale = rememberUpdatedState(onScale)
     BoxWithConstraints(modifier) {
         val parentWidth = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val parentHeight = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val widthFraction = .22f * scale
+        val heightFraction = .12f * scale
+        val minX = widthFraction / 2f
+        val minY = heightFraction / 2f
         Box(
-            Modifier.offset { IntOffset((parentWidth * position.x - parentWidth * .11f).roundToInt(), (parentHeight * position.y - parentHeight * .06f).roundToInt()) }
-                .width(maxWidth * .22f).height(maxHeight * .12f)
+            Modifier.offset { IntOffset((parentWidth * (position.x - minX)).roundToInt(), (parentHeight * (position.y - minY)).roundToInt()) }
+                .width(maxWidth * widthFraction).height(maxHeight * heightFraction)
                 .pointerInput(parentWidth, parentHeight) {
                     var draggedPosition: LogoPosition? = null
                     detectDragGestures(
@@ -352,16 +378,28 @@ private fun DraggableLogo(bitmap: androidx.compose.ui.graphics.ImageBitmap, posi
                         change.consume()
                         val current = draggedPosition ?: latestPosition.value
                         val next = LogoPosition(
-                            x = (current.x + drag.x / parentWidth).coerceIn(.11f, .89f),
-                            y = (current.y + drag.y / parentHeight).coerceIn(.06f, .94f)
+                            x = (current.x + drag.x / parentWidth).coerceIn(minX, 1f - minX),
+                            y = (current.y + drag.y / parentHeight).coerceIn(minY, 1f - minY)
                         )
                         draggedPosition = next
-                        latestOnChange.value(next)
+                        latestOnMove.value(next)
                     }
                 },
             contentAlignment = Alignment.Center
         ) {
             androidx.compose.foundation.Image(bitmap, "Drag to move logo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            Box(
+                Modifier.align(Alignment.BottomEnd).size(28.dp).background(Accent.copy(alpha = .96f), RoundedCornerShape(topStart = 8.dp))
+                    .pointerInput(parentWidth, parentHeight) {
+                        var currentScale = scale
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            currentScale = (currentScale + drag.x / parentWidth * 1.5f + drag.y / parentHeight * 1.5f).coerceIn(.4f, 2.2f)
+                            latestOnScale.value(currentScale)
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) { Text("↘", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
         }
     }
 }
@@ -373,9 +411,30 @@ private fun VideoPreview(uri: Uri, mirror: Boolean, zoom: Float, modifier: Modif
     DisposableEffect(player) { onDispose { player.release() } }
     AndroidView(
         modifier = modifier,
-        factory = { ctx -> (LayoutInflater.from(ctx).inflate(R.layout.preview_player, android.widget.FrameLayout(ctx), false) as PlayerView).apply { this.player = player; scaleX = if (mirror) -zoom else zoom; scaleY = zoom } },
-        update = { it.player = player; it.scaleX = if (mirror) -zoom else zoom; it.scaleY = zoom }
+        factory = { ctx ->
+            (LayoutInflater.from(ctx).inflate(R.layout.preview_player, android.widget.FrameLayout(ctx), false) as PlayerView).apply {
+                this.player = player
+                scaleX = 1f
+                scaleY = 1f
+                post { applyVideoTextureTransform(this, mirror, zoom) }
+            }
+        },
+        update = { view ->
+            view.player = player
+            view.scaleX = 1f
+            view.scaleY = 1f
+            view.post { applyVideoTextureTransform(view, mirror, zoom) }
+        }
     )
+}
+
+private fun applyVideoTextureTransform(playerView: PlayerView, mirror: Boolean, zoom: Float) {
+    val videoTexture = playerView.videoSurfaceView as? TextureView ?: return
+    if (videoTexture.width <= 0 || videoTexture.height <= 0) return
+    val transform = Matrix().apply {
+        setScale(if (mirror) -zoom else zoom, zoom, videoTexture.width / 2f, videoTexture.height / 2f)
+    }
+    videoTexture.setTransform(transform)
 }
 
 private fun fullFrameOverlaySettings(): OverlaySettings = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, 0f).setOverlayFrameAnchor(0f, 0f).setScale(1f, 1f).build()
@@ -386,15 +445,18 @@ private fun makeWarmOverlay(intensity: Float): Bitmap {
     return bitmap
 }
 
-private fun makeLogoOverlay(file: File, position: LogoPosition): Bitmap {
+private fun makeLogoOverlay(file: File, position: LogoPosition, scale: Float): Bitmap {
     val output = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
     val source = BitmapFactory.decodeFile(file.absolutePath) ?: return output
-    val maxWidth = 1080f * .22f; val maxHeight = 1920f * .12f
+    val maxWidth = 1080f * .22f * scale.coerceIn(.4f, 2.2f)
+    val maxHeight = 1920f * .12f * scale.coerceIn(.4f, 2.2f)
     val factor = minOf(maxWidth / source.width, maxHeight / source.height, 1f)
     val width = source.width * factor; val height = source.height * factor
-    val left = (position.x.coerceIn(.11f, .89f) * 1080f - maxWidth / 2f).coerceIn(0f, 1080f - width)
-    val top = (position.y.coerceIn(.06f, .94f) * 1920f - maxHeight / 2f).coerceIn(0f, 1920f - height)
+    val halfWidth = maxWidth / 2160f
+    val halfHeight = maxHeight / 3840f
+    val left = (position.x.coerceIn(halfWidth, 1f - halfWidth) * 1080f - width / 2f).coerceIn(0f, 1080f - width)
+    val top = (position.y.coerceIn(halfHeight, 1f - halfHeight) * 1920f - height / 2f).coerceIn(0f, 1920f - height)
     canvas.drawBitmap(source, null, RectF(left, top, left + width, top + height), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
     source.recycle()
     return output
