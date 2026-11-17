@@ -302,8 +302,8 @@ private fun EditorScreen() {
                         add(Crop(-1f / zoom, 1f / zoom, -1f / zoom, 1f / zoom))
                         add(Presentation.createForWidthAndHeight(OUTPUT_WIDTH, OUTPUT_HEIGHT, Presentation.LAYOUT_SCALE_TO_FIT))
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
-                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
+                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
                         add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBorderOverlay(borderColorHex), fullFrameOverlaySettings()))))
                     }
