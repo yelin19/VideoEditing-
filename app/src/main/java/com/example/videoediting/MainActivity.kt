@@ -60,6 +60,8 @@ import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.AudioEncoderSettings
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
@@ -67,6 +69,7 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import java.io.File
@@ -79,6 +82,10 @@ import kotlinx.coroutines.isActive
 private val Background = Color(0xFF10131B)
 private val Panel = Color(0xFF1A1E29)
 private val Accent = Color(0xFF9C7BFF)
+private const val OUTPUT_WIDTH = 720
+private const val OUTPUT_HEIGHT = 1280
+private const val OUTPUT_VIDEO_BITRATE = 1_200_000
+private const val OUTPUT_AUDIO_BITRATE = 96_000
 private data class BlurRect(val x: Float = .22f, val y: Float = .70f, val w: Float = .56f, val h: Float = .11f)
 private data class LogoPosition(val x: Float = .86f, val y: Float = .92f)
 
@@ -251,7 +258,7 @@ private fun EditorScreen() {
                     val temp = File(context.cacheDir, "export-${UUID.randomUUID()}.mp4")
                     tempOutput = temp
                     val outputEffects = buildList {
-                        add(Presentation.createForWidthAndHeight(1080, 1920, Presentation.LAYOUT_SCALE_TO_FIT))
+                        add(Presentation.createForWidthAndHeight(OUTPUT_WIDTH, OUTPUT_HEIGHT, Presentation.LAYOUT_SCALE_TO_FIT))
                         add(ScaleAndRotateTransformation.Builder().setScale(if (mirror) -zoom else zoom, zoom).build())
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
                         savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
@@ -267,7 +274,11 @@ private fun EditorScreen() {
                     } else Composition.Builder(videoSequence).build()
                     progress = 0f
                     exporting = true
-                    val transformer = Transformer.Builder(context).addListener(object : Transformer.Listener {
+                    val compactEncoderFactory = DefaultEncoderFactory.Builder(context)
+                        .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(OUTPUT_VIDEO_BITRATE).build())
+                        .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(OUTPUT_AUDIO_BITRATE).build())
+                        .build()
+                    val transformer = Transformer.Builder(context).setEncoderFactory(compactEncoderFactory).addListener(object : Transformer.Listener {
                         override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                             activeTransformer = null
                             runCatching { saveToGallery(context, temp) }
@@ -289,7 +300,9 @@ private fun EditorScreen() {
         }
         if (exporting) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(top = 9.dp), color = Accent)
         Spacer(Modifier.height(18.dp))
-        Text("Output: 1080 × 1920 MP4 · Movies/VideoEditing", color = Color(0xFF858BA0), fontSize = 11.sp)
+        Text("720p · 720 × 1280 · 1.2 Mbps video", color = Color(0xFF858BA0), fontSize = 11.sp)
+        Text("About 9–10 MB/min; varies with video and audio.", color = Color(0xFF858BA0), fontSize = 11.sp)
+        Text("Saved to Movies/VideoEditing", color = Color(0xFF858BA0), fontSize = 11.sp)
         Spacer(Modifier.height(24.dp))
         }
     }
@@ -463,23 +476,23 @@ private fun applyVideoTextureTransform(playerView: PlayerView, mirror: Boolean, 
 private fun fullFrameOverlaySettings(): OverlaySettings = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, 0f).setOverlayFrameAnchor(0f, 0f).setScale(1f, 1f).build()
 
 private fun makeWarmOverlay(intensity: Float): Bitmap {
-    val bitmap = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
+    val bitmap = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
     Canvas(bitmap).drawColor(AndroidColor.argb((intensity.coerceIn(0f, 1f) * 128).roundToInt(), 255, 159, 76))
     return bitmap
 }
 
 private fun makeLogoOverlay(file: File, position: LogoPosition, scale: Float): Bitmap {
-    val output = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
+    val output = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
     val source = BitmapFactory.decodeFile(file.absolutePath) ?: return output
-    val maxWidth = 1080f * .22f * scale.coerceIn(.4f, 2.2f)
-    val maxHeight = 1920f * .12f * scale.coerceIn(.4f, 2.2f)
+    val maxWidth = OUTPUT_WIDTH * .22f * scale.coerceIn(.4f, 2.2f)
+    val maxHeight = OUTPUT_HEIGHT * .12f * scale.coerceIn(.4f, 2.2f)
     val factor = minOf(maxWidth / source.width, maxHeight / source.height, 1f)
     val width = source.width * factor; val height = source.height * factor
-    val halfWidth = maxWidth / 2160f
-    val halfHeight = maxHeight / 3840f
-    val left = (position.x.coerceIn(halfWidth, 1f - halfWidth) * 1080f - width / 2f).coerceIn(0f, 1080f - width)
-    val top = (position.y.coerceIn(halfHeight, 1f - halfHeight) * 1920f - height / 2f).coerceIn(0f, 1920f - height)
+    val halfWidth = maxWidth / (2f * OUTPUT_WIDTH)
+    val halfHeight = maxHeight / (2f * OUTPUT_HEIGHT)
+    val left = (position.x.coerceIn(halfWidth, 1f - halfWidth) * OUTPUT_WIDTH - width / 2f).coerceIn(0f, OUTPUT_WIDTH - width)
+    val top = (position.y.coerceIn(halfHeight, 1f - halfHeight) * OUTPUT_HEIGHT - height / 2f).coerceIn(0f, OUTPUT_HEIGHT - height)
     canvas.drawBitmap(source, null, RectF(left, top, left + width, top + height), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
     source.recycle()
     return output
@@ -496,8 +509,8 @@ private fun createLogoOverlay(file: File, position: LogoPosition, scale: Float):
 private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosition, scale: Float) : BitmapOverlay() {
     private val movie = Movie.decodeFile(file.absolutePath) ?: error("This GIF could not be decoded")
     private val durationMs = movie.duration().coerceAtLeast(100)
-    private val maxWidth = 1080f * .22f * scale.coerceIn(.4f, 2.2f)
-    private val maxHeight = 1920f * .12f * scale.coerceIn(.4f, 2.2f)
+    private val maxWidth = OUTPUT_WIDTH * .22f * scale.coerceIn(.4f, 2.2f)
+    private val maxHeight = OUTPUT_HEIGHT * .12f * scale.coerceIn(.4f, 2.2f)
     private val bitmapScale = minOf(maxWidth / movie.width().coerceAtLeast(1), maxHeight / movie.height().coerceAtLeast(1), 1f)
     private val frameWidth = (movie.width() * bitmapScale).roundToInt().coerceAtLeast(1)
     private val frameHeight = (movie.height() * bitmapScale).roundToInt().coerceAtLeast(1)
@@ -516,11 +529,11 @@ private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosi
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
-        val halfWidth = maxWidth / 2f / 1080f
-        val halfHeight = maxHeight / 2f / 1920f
+        val halfWidth = maxWidth / 2f / OUTPUT_WIDTH
+        val halfHeight = maxHeight / 2f / OUTPUT_HEIGHT
         val x = position.x.coerceIn(halfWidth, 1f - halfWidth) * 2f - 1f
         val y = 1f - position.y.coerceIn(halfHeight, 1f - halfHeight) * 2f
-        val preservePixelAspect = frameWidth * 1920f / (frameHeight * 1080f)
+        val preservePixelAspect = frameWidth * OUTPUT_HEIGHT.toFloat() / (frameHeight * OUTPUT_WIDTH)
         return OverlaySettings.Builder()
             .setBackgroundFrameAnchor(x, y)
             .setOverlayFrameAnchor(0f, 0f)
@@ -530,12 +543,12 @@ private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosi
 }
 
 private fun makeBlurCoverOverlay(rect: BlurRect, strength: Float): Bitmap {
-    val output = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
+    val output = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
     val alpha = (80 + 170 * strength.coerceIn(0f, 1f)).roundToInt().coerceIn(0, 250)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb(alpha, 216, 221, 233) }
-    val left = rect.x.coerceIn(0f, 1f) * 1080f; val top = rect.y.coerceIn(0f, 1f) * 1920f
-    canvas.drawRoundRect(RectF(left, top, left + rect.w.coerceIn(.05f, 1f) * 1080f, top + rect.h.coerceIn(.03f, 1f) * 1920f), 18f, 18f, paint)
+    val left = rect.x.coerceIn(0f, 1f) * OUTPUT_WIDTH; val top = rect.y.coerceIn(0f, 1f) * OUTPUT_HEIGHT
+    canvas.drawRoundRect(RectF(left, top, left + rect.w.coerceIn(.05f, 1f) * OUTPUT_WIDTH, top + rect.h.coerceIn(.03f, 1f) * OUTPUT_HEIGHT), 12f, 12f, paint)
     return output
 }
 
