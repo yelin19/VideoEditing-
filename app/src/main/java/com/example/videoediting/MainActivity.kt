@@ -75,7 +75,8 @@ import kotlinx.coroutines.isActive
 private val Background = Color(0xFF10131B)
 private val Panel = Color(0xFF1A1E29)
 private val Accent = Color(0xFF9C7BFF)
-private data class BlurRect(var x: Float = .08f, var y: Float = .70f, var w: Float = .84f, var h: Float = .11f)
+private data class BlurRect(val x: Float = .22f, val y: Float = .70f, val w: Float = .56f, val h: Float = .11f)
+private data class LogoPosition(val x: Float = .86f, val y: Float = .92f)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -98,6 +99,8 @@ private fun EditorScreen() {
     var muteOriginal by remember { mutableStateOf(true) }
     var blurEnabled by remember { mutableStateOf(true) }
     var blurRect by remember { mutableStateOf(BlurRect()) }
+    var blurStrength by remember { mutableFloatStateOf(.92f) }
+    var logoPosition by remember { mutableStateOf(LogoPosition(prefs.getFloat("logo_x", .86f), prefs.getFloat("logo_y", .92f))) }
     var message by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -110,7 +113,7 @@ private fun EditorScreen() {
         }.onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG or JPG." }
     }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) { videoUri = uri; blurRect = BlurRect() }
+                if (uri != null) { videoUri = uri; blurRect = BlurRect() }
     }
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> audioUri = uri }
 
@@ -141,14 +144,13 @@ private fun EditorScreen() {
             if (warmEnabled && videoUri != null) {
                 Box(Modifier.fillMaxSize().background(Color(0xFFFF9F4C).copy(alpha = warmAmount * .22f)))
             }
-            if (blurEnabled && videoUri != null) InteractiveBlurBox(blurRect, Modifier.fillMaxSize(), onChange = { blurRect = it })
+            if (blurEnabled && videoUri != null) InteractiveBlurBox(blurRect, blurStrength, Modifier.fillMaxSize(), onChange = { blurRect = it })
             savedLogo?.let { file ->
                 val bitmap = remember(file.absolutePath) { decodeLogoPreview(file)?.asImageBitmap() }
-                bitmap?.let {
-                    BoxWithConstraints(Modifier.align(Alignment.BottomEnd).padding(14.dp)) {
-                        androidx.compose.foundation.Image(it, null, Modifier.width(maxWidth * .22f).height(maxHeight * .12f), contentScale = ContentScale.Fit)
-                    }
-                }
+                bitmap?.let { DraggableLogo(it, logoPosition, Modifier.fillMaxSize()) { next ->
+                    logoPosition = next
+                    prefs.edit().putFloat("logo_x", next.x).putFloat("logo_y", next.y).apply()
+                } }
             }
             if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(9.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 8.dp, vertical = 5.dp), color = Color.White, fontSize = 9.sp)
         }
@@ -169,8 +171,12 @@ private fun EditorScreen() {
         }
         Spacer(Modifier.height(10.dp))
         SectionTitle("SUBTITLE COVER")
-        SettingSwitch("Show adjustable blur box", "Drag the panel; pull its lower-right handle to resize", blurEnabled) { blurEnabled = it }
-        Text("Box location and size are normalized to the 9:16 output frame.", color = Color(0xFF858BA0), fontSize = 12.sp)
+        SettingSwitch("Show adjustable blur box", "Drag anywhere inside; use the corner handle to resize", blurEnabled) { blurEnabled = it }
+        Text("Cover strength · ${(blurStrength * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+        Slider(value = blurStrength, onValueChange = { blurStrength = it }, valueRange = .15f..1f)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { blurRect = BlurRect() }) { Text("Reset blur position") }
+        }
         Spacer(Modifier.height(10.dp))
 
         SectionTitle("AUDIO")
@@ -194,7 +200,7 @@ private fun EditorScreen() {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(if (savedLogo == null) "No logo selected" else "Custom logo saved", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text("Bottom-right · saved on device", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+                Text("Drag logo on preview · saved on device", color = Color(0xFFA7ACBC), fontSize = 11.sp)
             }
             if (savedLogo != null) IconButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }) { Icon(Icons.Default.Close, "Remove Logo", tint = Color(0xFFCF9DA6)) }
         }
@@ -202,6 +208,10 @@ private fun EditorScreen() {
         OutlinedButton(onClick = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(14.dp)) {
             Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(7.dp)); Text(if (savedLogo == null) "Choose Logo" else "Change Logo")
         }
+        if (savedLogo != null) TextButton(onClick = {
+            logoPosition = LogoPosition()
+            prefs.edit().putFloat("logo_x", logoPosition.x).putFloat("logo_y", logoPosition.y).apply()
+        }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Reset logo position") }
         if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Remove Logo", color = Color(0xFFCF9DA6)) }
 
         Spacer(Modifier.height(16.dp))
@@ -217,8 +227,8 @@ private fun EditorScreen() {
                         add(Presentation.createForWidthAndHeight(1080, 1920, Presentation.LAYOUT_SCALE_TO_FIT))
                         add(ScaleAndRotateTransformation.Builder().setScale(if (mirror) -zoom else zoom, zoom).build())
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
-                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeLogoOverlay(it), fullFrameOverlaySettings())))) }
-                        if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect), fullFrameOverlaySettings()))))
+                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeLogoOverlay(it, logoPosition), fullFrameOverlaySettings())))) }
+                        if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
                         .setRemoveAudio(muteOriginal || audioUri != null)
@@ -270,7 +280,9 @@ private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onC
 }
 
 @Composable
-private fun InteractiveBlurBox(rect: BlurRect, modifier: Modifier, onChange: (BlurRect) -> Unit) {
+private fun InteractiveBlurBox(rect: BlurRect, blurStrength: Float, modifier: Modifier, onChange: (BlurRect) -> Unit) {
+    val latestRect = rememberUpdatedState(rect)
+    val latestOnChange = rememberUpdatedState(onChange)
     BoxWithConstraints(modifier) {
         val parentWidth = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val parentHeight = constraints.maxHeight.toFloat().coerceAtLeast(1f)
@@ -279,24 +291,77 @@ private fun InteractiveBlurBox(rect: BlurRect, modifier: Modifier, onChange: (Bl
         Box(
             Modifier.offset { IntOffset((parentWidth * rect.x).roundToInt(), (parentHeight * rect.y).roundToInt()) }
                 .size(boxWidth, boxHeight).clip(RoundedCornerShape(5.dp))
-                .background(Color(0x88444C60)).border(1.dp, Color(0xFFE2D8FF), RoundedCornerShape(5.dp))
-                .pointerInput(rect, parentWidth, parentHeight) {
-                    detectDragGestures { change, drag ->
+                .background(Color(0xFFB8BEC8).copy(alpha = .2f + blurStrength * .74f)).border(1.dp, Color(0xFFE2D8FF), RoundedCornerShape(5.dp))
+                .pointerInput(parentWidth, parentHeight) {
+                    var draggedRect: BlurRect? = null
+                    detectDragGestures(
+                        onDragStart = { draggedRect = latestRect.value },
+                        onDragEnd = { draggedRect = null },
+                        onDragCancel = { draggedRect = null }
+                    ) { change, drag ->
                         change.consume()
-                        onChange(rect.copy(x = (rect.x + drag.x / parentWidth).coerceIn(0f, 1f - rect.w), y = (rect.y + drag.y / parentHeight).coerceIn(0f, 1f - rect.h)))
+                        val current = draggedRect ?: latestRect.value
+                        val next = current.copy(
+                            x = (current.x + drag.x / parentWidth).coerceIn(0f, 1f - current.w),
+                            y = (current.y + drag.y / parentHeight).coerceIn(0f, 1f - current.h)
+                        )
+                        draggedRect = next
+                        latestOnChange.value(next)
                     }
                 },
             contentAlignment = Alignment.Center
         ) {
             Text("BLUR / SUBTITLE COVER", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
-            Box(Modifier.align(Alignment.BottomEnd).size(24.dp).background(Accent.copy(alpha = .9f), RoundedCornerShape(topStart = 7.dp)).pointerInput(rect, parentWidth, parentHeight) {
-                detectDragGestures { change, drag ->
+            Box(Modifier.align(Alignment.BottomEnd).size(36.dp).background(Accent.copy(alpha = .95f), RoundedCornerShape(topStart = 9.dp)).pointerInput(parentWidth, parentHeight) {
+                var draggedRect: BlurRect? = null
+                detectDragGestures(
+                    onDragStart = { draggedRect = latestRect.value },
+                    onDragEnd = { draggedRect = null },
+                    onDragCancel = { draggedRect = null }
+                ) { change, drag ->
                     change.consume()
-                    val newW = (rect.w + drag.x / parentWidth).coerceIn(.16f, .92f - rect.x)
-                    val newH = (rect.h + drag.y / parentHeight).coerceIn(.06f, .3f)
-                    onChange(rect.copy(w = newW, h = newH, y = rect.y.coerceAtMost(1f - newH)))
+                    val current = draggedRect ?: latestRect.value
+                    val newW = (current.w + drag.x / parentWidth).coerceIn(.16f, 1f - current.x)
+                    val newH = (current.h + drag.y / parentHeight).coerceIn(.06f, .35f)
+                    val next = current.copy(w = newW, h = newH, y = current.y.coerceAtMost(1f - newH))
+                    draggedRect = next
+                    latestOnChange.value(next)
                 }
-            }, contentAlignment = Alignment.Center) { Text("↘", color = Color.White, fontSize = 15.sp) }
+            }, contentAlignment = Alignment.Center) { Text("↘", color = Color.White, fontSize = 18.sp) }
+        }
+    }
+}
+
+@Composable
+private fun DraggableLogo(bitmap: androidx.compose.ui.graphics.ImageBitmap, position: LogoPosition, modifier: Modifier, onChange: (LogoPosition) -> Unit) {
+    val latestPosition = rememberUpdatedState(position)
+    val latestOnChange = rememberUpdatedState(onChange)
+    BoxWithConstraints(modifier) {
+        val parentWidth = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val parentHeight = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        Box(
+            Modifier.offset { IntOffset((parentWidth * position.x - parentWidth * .11f).roundToInt(), (parentHeight * position.y - parentHeight * .06f).roundToInt()) }
+                .width(maxWidth * .22f).height(maxHeight * .12f)
+                .pointerInput(parentWidth, parentHeight) {
+                    var draggedPosition: LogoPosition? = null
+                    detectDragGestures(
+                        onDragStart = { draggedPosition = latestPosition.value },
+                        onDragEnd = { draggedPosition = null },
+                        onDragCancel = { draggedPosition = null }
+                    ) { change, drag ->
+                        change.consume()
+                        val current = draggedPosition ?: latestPosition.value
+                        val next = LogoPosition(
+                            x = (current.x + drag.x / parentWidth).coerceIn(.11f, .89f),
+                            y = (current.y + drag.y / parentHeight).coerceIn(.06f, .94f)
+                        )
+                        draggedPosition = next
+                        latestOnChange.value(next)
+                    }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.foundation.Image(bitmap, "Drag to move logo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         }
     }
 }
@@ -321,23 +386,25 @@ private fun makeWarmOverlay(intensity: Float): Bitmap {
     return bitmap
 }
 
-private fun makeLogoOverlay(file: File): Bitmap {
+private fun makeLogoOverlay(file: File, position: LogoPosition): Bitmap {
     val output = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
     val source = BitmapFactory.decodeFile(file.absolutePath) ?: return output
-    val maxWidth = 205f; val maxHeight = 150f
+    val maxWidth = 1080f * .22f; val maxHeight = 1920f * .12f
     val factor = minOf(maxWidth / source.width, maxHeight / source.height, 1f)
     val width = source.width * factor; val height = source.height * factor
-    val left = 1080f - width - 48f; val top = 1920f - height - 54f
+    val left = (position.x.coerceIn(.11f, .89f) * 1080f - maxWidth / 2f).coerceIn(0f, 1080f - width)
+    val top = (position.y.coerceIn(.06f, .94f) * 1920f - maxHeight / 2f).coerceIn(0f, 1920f - height)
     canvas.drawBitmap(source, null, RectF(left, top, left + width, top + height), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
     source.recycle()
     return output
 }
 
-private fun makeBlurCoverOverlay(rect: BlurRect): Bitmap {
+private fun makeBlurCoverOverlay(rect: BlurRect, strength: Float): Bitmap {
     val output = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb(185, 216, 221, 233) }
+    val alpha = (80 + 170 * strength.coerceIn(0f, 1f)).roundToInt().coerceIn(0, 250)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb(alpha, 216, 221, 233) }
     val left = rect.x.coerceIn(0f, 1f) * 1080f; val top = rect.y.coerceIn(0f, 1f) * 1920f
     canvas.drawRoundRect(RectF(left, top, left + rect.w.coerceIn(.05f, 1f) * 1080f, top + rect.h.coerceIn(.03f, 1f) * 1920f), 18f, 18f, paint)
     return output
