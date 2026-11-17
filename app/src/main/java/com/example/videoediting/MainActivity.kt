@@ -12,6 +12,7 @@ import android.graphics.ImageDecoder
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Movie
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
@@ -26,6 +27,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -59,6 +62,7 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BitmapOverlay
+import androidx.media3.effect.Crop
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
@@ -122,6 +126,8 @@ private fun EditorScreen() {
     var blurStrength by remember { mutableFloatStateOf(.92f) }
     var logoPosition by remember { mutableStateOf(LogoPosition(prefs.getFloat("logo_x", .86f), prefs.getFloat("logo_y", .92f))) }
     var logoScale by remember { mutableFloatStateOf(prefs.getFloat("logo_scale", 1f).coerceIn(.4f, 2.2f)) }
+    var borderColorHex by remember { mutableStateOf(prefs.getString("border_color", "#9C7BFF") ?: "#9C7BFF") }
+    var scrollingCaption by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -163,7 +169,7 @@ private fun EditorScreen() {
         Spacer(Modifier.height(4.dp))
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1.05f)) {
             val previewWidth = minOf(maxWidth, maxHeight * 9f / 16f)
-            Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D)).border(1.dp, Color(0xFF303443), RoundedCornerShape(18.dp))) {
+            Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D))) {
                 if (videoUri != null) VideoPreview(videoUri!!, audioUri, mirror, zoom, muteOriginal, videoAudioVolume, replacementAudioEnabled, replacementAudioVolume, Modifier.fillMaxSize())
                 if (videoUri == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.Movie, null, tint = Color(0xFF73798C), modifier = Modifier.size(36.dp))
@@ -192,6 +198,8 @@ private fun EditorScreen() {
                     })
                 }
                 if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(7.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, fontSize = 8.sp)
+                if (scrollingCaption.isNotBlank() && videoUri != null) ScrollingCaptionPreview(scrollingCaption, Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(34.dp))
+                Box(Modifier.fillMaxSize().border(3.dp, Color(AndroidColor.parseColor(borderColorHex)), RoundedCornerShape(18.dp)))
             }
         }
         Spacer(Modifier.height(5.dp))
@@ -209,6 +217,19 @@ private fun EditorScreen() {
             Text("Filter intensity · ${(warmAmount * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Slider(value = warmAmount, onValueChange = { warmAmount = it }, valueRange = 0f..1f)
         }
+        SectionTitle("VIDEO FRAME")
+        Text("Border color", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            listOf("#9C7BFF", "#FFFFFF", "#FF5252", "#FFD740", "#40C4FF", "#69F0AE").forEach { hex ->
+                Box(Modifier.size(32.dp).clip(RoundedCornerShape(16.dp)).background(Color(AndroidColor.parseColor(hex)))
+                    .then(if (hex == borderColorHex) Modifier.border(3.dp, Color.White, RoundedCornerShape(16.dp)) else Modifier)
+                    .clickable { borderColorHex = hex; prefs.edit().putString("border_color", hex).apply() })
+            }
+        }
+        SectionTitle("SCROLLING CAPTION")
+        OutlinedTextField(value = scrollingCaption, onValueChange = { scrollingCaption = it }, modifier = Modifier.fillMaxWidth(),
+            label = { Text("Text to scroll across the video") }, placeholder = { Text("Type a message for the scrolling caption") }, singleLine = true)
+        Text("The caption scrolls across the bottom in preview and export.", color = Color(0xFF858BA0), fontSize = 11.sp)
         Spacer(Modifier.height(10.dp))
         SectionTitle("SUBTITLE COVER")
         SettingSwitch("Show adjustable blur box", "Drag anywhere inside; use the corner handle to resize", blurEnabled) { blurEnabled = it }
@@ -277,11 +298,14 @@ private fun EditorScreen() {
                     val temp = File(context.cacheDir, "export-${UUID.randomUUID()}.mp4")
                     tempOutput = temp
                     val outputEffects = buildList {
-                        add(Presentation.createForWidthAndHeight(OUTPUT_WIDTH, OUTPUT_HEIGHT, Presentation.LAYOUT_SCALE_TO_FIT))
                         add(ScaleAndRotateTransformation.Builder().setScale(if (mirror) -zoom else zoom, zoom).build())
+                        add(Crop(-1f / zoom, 1f / zoom, -1f / zoom, 1f / zoom))
+                        add(Presentation.createForWidthAndHeight(OUTPUT_WIDTH, OUTPUT_HEIGHT, Presentation.LAYOUT_SCALE_TO_FIT))
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
                         savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
+                        if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
+                        add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBorderOverlay(borderColorHex), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
                         .setRemoveAudio(muteOriginal)
@@ -545,6 +569,54 @@ private fun applyVideoTextureTransform(playerView: PlayerView, mirror: Boolean, 
 }
 
 private fun fullFrameOverlaySettings(): OverlaySettings = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, 0f).setOverlayFrameAnchor(0f, 0f).setScale(1f, 1f).build()
+
+@Composable
+private fun ScrollingCaptionPreview(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = "   $text   •   $text   •   ",
+        modifier = modifier.background(Color.Black.copy(alpha = .68f)).basicMarquee(iterations = Int.MAX_VALUE).padding(horizontal = 8.dp, vertical = 5.dp),
+        color = Color.White,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1
+    )
+}
+
+private fun makeBorderOverlay(colorHex: String): Bitmap {
+    val bitmap = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = AndroidColor.parseColor(colorHex)
+        style = Paint.Style.STROKE
+        strokeWidth = 12f
+    }
+    Canvas(bitmap).drawRoundRect(RectF(8f, 8f, OUTPUT_WIDTH - 8f, OUTPUT_HEIGHT - 8f), 26f, 26f, paint)
+    return bitmap
+}
+
+private class ScrollingCaptionOverlay(private val text: String) : BitmapOverlay() {
+    private val bitmap = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
+    private val canvas = Canvas(bitmap)
+    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb(176, 0, 0, 0) }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = AndroidColor.WHITE
+        textSize = 42f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+    private val durationUs = 8_000_000L
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        bitmap.eraseColor(AndroidColor.TRANSPARENT)
+        val bandTop = OUTPUT_HEIGHT - 86f
+        canvas.drawRect(0f, bandTop, OUTPUT_WIDTH.toFloat(), OUTPUT_HEIGHT.toFloat(), backgroundPaint)
+        val message = "   $text   •   "
+        val textWidth = textPaint.measureText(message)
+        val phase = (presentationTimeUs.coerceAtLeast(0L) % durationUs).toFloat() / durationUs
+        canvas.drawText(message, OUTPUT_WIDTH - phase * (OUTPUT_WIDTH + textWidth), OUTPUT_HEIGHT - 29f, textPaint)
+        return bitmap
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = fullFrameOverlaySettings()
+}
 
 private fun makeWarmOverlay(intensity: Float): Bitmap {
     val bitmap = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
