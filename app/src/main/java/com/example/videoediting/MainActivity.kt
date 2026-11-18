@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -113,6 +114,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun EditorScreen() {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val prefs = remember { context.getSharedPreferences("video_editing", Context.MODE_PRIVATE) }
     var savedLogo by remember { mutableStateOf(readValidLogo(prefs)) }
     var logoCropBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -142,6 +144,7 @@ private fun EditorScreen() {
     var subtitlePositionX by remember { mutableFloatStateOf(.5f) }
     var subtitlePositionY by remember { mutableFloatStateOf(.83f) }
     var subtitlePreviewRestartKey by remember { mutableIntStateOf(0) }
+    var previewCanvasWidthPx by remember { mutableFloatStateOf(0f) }
     var previewPositionMs by remember { mutableLongStateOf(0L) }
     var message by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
@@ -197,7 +200,7 @@ private fun EditorScreen() {
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1.05f)) {
             val previewWidth = minOf(maxWidth, maxHeight * 9f / 16f)
             val previewHeight = previewWidth * 16f / 9f
-            Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D))) {
+            Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).onSizeChanged { previewCanvasWidthPx = it.width.toFloat() }.clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D))) {
                 if (videoUri != null) VideoPreview(videoUri!!, audioUri, mirror, zoom, muteOriginal, videoAudioVolume, replacementAudioEnabled, replacementAudioVolume, subtitlePreviewRestartKey, Modifier.fillMaxSize(), onPosition = { previewPositionMs = it })
                 if (videoUri == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.Movie, null, tint = Color(0xFF73798C), modifier = Modifier.size(36.dp))
@@ -361,6 +364,12 @@ private fun EditorScreen() {
                 val source = videoUri
                 if (source == null) { message = "Choose a video first."; return@Button }
                 runCatching {
+                    val subtitleRenderScale = if (previewCanvasWidthPx > 0f) OUTPUT_WIDTH / previewCanvasWidthPx else 2f
+                    val subtitleRenderFontPx = with(density) { subtitleFontSp.sp.toPx() } * subtitleRenderScale
+                    val subtitlePaddingStartPx = with(density) { 10.dp.toPx() } * subtitleRenderScale
+                    val subtitlePaddingEndPx = with(density) { 24.dp.toPx() } * subtitleRenderScale
+                    val subtitleVerticalPaddingPx = with(density) { 6.dp.toPx() } * subtitleRenderScale
+                    val subtitleCornerRadiusPx = with(density) { 8.dp.toPx() } * subtitleRenderScale
                     val temp = File(context.cacheDir, "export-${UUID.randomUUID()}.mp4")
                     tempOutput = temp
                     val outputEffects = buildList {
@@ -371,7 +380,11 @@ private fun EditorScreen() {
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
                         savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
-                        if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(subtitleCues, subtitleOffsetMs.toLong(), subtitleFontSp * 2f, subtitlePositionX, subtitlePositionY))))
+                        if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(
+                            subtitleCues, subtitleOffsetMs.toLong(), subtitleRenderFontPx,
+                            subtitlePaddingStartPx, subtitlePaddingEndPx, subtitleVerticalPaddingPx, subtitleCornerRadiusPx,
+                            subtitlePositionX, subtitlePositionY
+                        ))))
                         add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBorderOverlay(borderColorHex), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
@@ -795,9 +808,22 @@ private fun InteractiveTimedSubtitle(
 ) {
     BoxWithConstraints(modifier) {
         val density = LocalDensity.current.density
-        val canvasWidthPx = with(LocalDensity.current) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val localDensity = LocalDensity.current
+        val canvasWidthPx = with(localDensity) { maxWidth.toPx() }.coerceAtLeast(1f)
         val canvasHeightPx = with(LocalDensity.current) { maxHeight.toPx() }.coerceAtLeast(1f)
         val resizeGripPx = with(LocalDensity.current) { 30.dp.toPx() }
+        val fontSizePx = with(localDensity) { fontSp.sp.toPx() }
+        val horizontalPaddingPx = with(localDensity) { 34.dp.toPx() }
+        val displayText = remember(text, fontSizePx, canvasWidthPx, horizontalPaddingPx) {
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = fontSizePx
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            }
+            val maxTextWidth = (canvasWidthPx * .78f - horizontalPaddingPx).coerceAtLeast(1f)
+            wrapSubtitleText(text, paint, maxTextWidth).let { lines ->
+                (if (lines.size <= 2) lines else listOf(lines.first(), lines.drop(1).joinToString(" "))).joinToString("\n")
+            }
+        }
         val currentX = rememberUpdatedState(positionX)
         val currentY = rememberUpdatedState(positionY)
         val currentFont = rememberUpdatedState(fontSp)
@@ -841,7 +867,7 @@ private fun InteractiveTimedSubtitle(
                 }
         ) {
             Text(
-                text = text,
+                text = displayText,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp))
                     .background(Color.Black.copy(alpha = .78f))
                     .border(1.dp, Accent.copy(alpha = .78f), RoundedCornerShape(8.dp))
@@ -901,6 +927,10 @@ private class TimedSubtitleOverlay(
     private val cues: List<SubtitleCue>,
     private val offsetMs: Long,
     fontSizePx: Float,
+    private val paddingStartPx: Float,
+    private val paddingEndPx: Float,
+    private val verticalPaddingPx: Float,
+    private val cornerRadiusPx: Float,
     private val horizontalPosition: Float,
     private val verticalPosition: Float
 ) : BitmapOverlay() {
@@ -908,28 +938,29 @@ private class TimedSubtitleOverlay(
     private val canvas = Canvas(bitmap)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = AndroidColor.WHITE
-        textSize = fontSizePx.coerceIn(24f, 80f)
+        textSize = fontSizePx.coerceAtLeast(1f)
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        setShadowLayer(3f, 1f, 2f, AndroidColor.BLACK)
     }
-    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb(220, 0, 0, 0) }
+    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb((.78f * 255).roundToInt(), 0, 0, 0) }
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         bitmap.eraseColor(AndroidColor.TRANSPARENT)
         val timeMs = presentationTimeUs.coerceAtLeast(0L) / 1_000L
         val cue = activeSubtitleCue(cues, timeMs, offsetMs) ?: return bitmap
-        val lines = wrapSubtitleText(cue.text, paint, OUTPUT_WIDTH * .74f).let { wrapped ->
+        val maxTextWidth = (OUTPUT_WIDTH * .78f - paddingStartPx - paddingEndPx).coerceAtLeast(1f)
+        val lines = wrapSubtitleText(cue.text, paint, maxTextWidth).let { wrapped ->
             if (wrapped.size <= 2) wrapped else listOf(wrapped.first(), wrapped.drop(1).joinToString(" "))
         }
-        val lineHeight = paint.textSize * 1.2f
-        val boxHeight = lines.size * lineHeight + 20f
-        val boxWidth = (lines.maxOfOrNull(paint::measureText) ?: 0f).coerceAtMost(OUTPUT_WIDTH - 24f) + 28f
-        val centerX = (horizontalPosition.coerceIn(.08f, .92f) * OUTPUT_WIDTH).coerceIn(boxWidth / 2f + 12f, OUTPUT_WIDTH - boxWidth / 2f - 12f)
+        val lineHeight = paint.textSize * 1.18f
+        val boxHeight = lines.size * lineHeight + verticalPaddingPx * 2f
+        val boxWidth = (lines.maxOfOrNull(paint::measureText) ?: 0f).coerceAtMost(maxTextWidth) + paddingStartPx + paddingEndPx
+        val centerX = horizontalPosition.coerceIn(.08f, .92f) * OUTPUT_WIDTH
         val centerY = verticalPosition.coerceIn(.1f, .95f) * OUTPUT_HEIGHT
-        val top = (centerY - boxHeight / 2f).coerceIn(12f, OUTPUT_HEIGHT - boxHeight - 12f)
-        canvas.drawRoundRect(RectF(centerX - boxWidth / 2f, top, centerX + boxWidth / 2f, top + boxHeight), 14f, 14f, background)
-        lines.forEachIndexed { index, line -> canvas.drawText(line, centerX, top + paint.textSize + 7f + index * lineHeight, paint) }
+        val top = centerY - boxHeight / 2f
+        canvas.drawRoundRect(RectF(centerX - boxWidth / 2f, top, centerX + boxWidth / 2f, top + boxHeight), cornerRadiusPx, cornerRadiusPx, background)
+        val textCenterX = centerX + (paddingStartPx - paddingEndPx) / 2f
+        lines.forEachIndexed { index, line -> canvas.drawText(line, textCenterX, top + verticalPaddingPx - paint.ascent() + index * lineHeight, paint) }
         return bitmap
     }
 
