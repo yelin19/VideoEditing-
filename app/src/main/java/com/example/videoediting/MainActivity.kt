@@ -369,6 +369,16 @@ private fun EditorScreen() {
         if (savedLogo != null) {
             Text("Logo size · ${(logoScale * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Slider(value = logoScale, onValueChange = { logoScale = it; prefs.edit().putFloat("logo_scale", it).apply() }, valueRange = .4f..2.2f)
+            Text("Logo left / right · ${(logoPosition.x * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = logoPosition.x, onValueChange = { value -> logoPosition = logoPosition.copy(x = value); prefs.edit().putFloat("logo_x", value).apply() }, valueRange = 0f..1f)
+            Text("Logo top / bottom · ${(logoPosition.y * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = logoPosition.y, onValueChange = { value -> logoPosition = logoPosition.copy(y = value); prefs.edit().putFloat("logo_y", value).apply() }, valueRange = 0f..1f)
+            Text("Snap logo to a corner", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Top left" to LogoPosition(0f, 0f), "Top right" to LogoPosition(1f, 0f), "Bottom left" to LogoPosition(0f, 1f), "Bottom right" to LogoPosition(1f, 1f)).forEach { (label, target) ->
+                    TextButton(onClick = { logoPosition = target; prefs.edit().putFloat("logo_x", target.x).putFloat("logo_y", target.y).apply() }, modifier = Modifier.weight(1f)) { Text(label, fontSize = 10.sp, maxLines = 1) }
+                }
+            }
         }
         if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = null; savedLogoCrop = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Remove Logo", color = Color(0xFFCF9DA6)) }
         }
@@ -638,8 +648,8 @@ private fun DraggableLogo(
         val parentHeight = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val widthFraction = .22f * scale
         val heightFraction = .12f * scale
-        val sourceWidth = (bitmap?.width ?: animatedDrawable?.intrinsicWidth ?: 1).coerceAtLeast(1).toFloat()
-        val sourceHeight = (bitmap?.height ?: animatedDrawable?.intrinsicHeight ?: 1).coerceAtLeast(1).toFloat()
+        val sourceWidth = (bitmap?.width ?: animatedDrawable?.intrinsicWidth ?: 1).coerceAtLeast(1) * (cropRect?.w ?: 1f)
+        val sourceHeight = (bitmap?.height ?: animatedDrawable?.intrinsicHeight ?: 1).coerceAtLeast(1) * (cropRect?.h ?: 1f)
         val fitScale = minOf(parentWidth * widthFraction / sourceWidth, parentHeight * heightFraction / sourceHeight)
         val visibleWidthFraction = sourceWidth * fitScale / parentWidth
         val visibleHeightFraction = sourceHeight * fitScale / parentHeight
