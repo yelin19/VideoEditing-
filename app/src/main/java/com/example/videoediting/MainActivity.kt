@@ -1040,7 +1040,9 @@ private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosi
         canvas.scale(frameWidth / movie.width().toFloat(), frameHeight / movie.height().toFloat())
         movie.draw(canvas, 0f, 0f)
         canvas.restore()
-        return frameBitmap
+        // Media3 may cache the overlay texture by Bitmap identity. Return a new snapshot
+        // at every presentation timestamp so each GIF frame is uploaded and rendered.
+        return frameBitmap.copy(Bitmap.Config.ARGB_8888, false)
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
