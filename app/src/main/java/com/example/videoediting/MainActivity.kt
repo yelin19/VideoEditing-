@@ -370,9 +370,9 @@ private fun EditorScreen() {
             Text("Logo size · ${(logoScale * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Slider(value = logoScale, onValueChange = { logoScale = it; prefs.edit().putFloat("logo_scale", it).apply() }, valueRange = .4f..2.2f)
             Text("Logo left / right · ${(logoPosition.x * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
-            Slider(value = logoPosition.x, onValueChange = { value -> logoPosition = logoPosition.copy(x = value); prefs.edit().putFloat("logo_x", value).apply() }, valueRange = 0f..1f)
+            Slider(value = logoPosition.x.coerceIn(-.30f, 1.30f), onValueChange = { value -> logoPosition = logoPosition.copy(x = value); prefs.edit().putFloat("logo_x", value).apply() }, valueRange = -.30f..1.30f)
             Text("Logo top / bottom · ${(logoPosition.y * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
-            Slider(value = logoPosition.y, onValueChange = { value -> logoPosition = logoPosition.copy(y = value); prefs.edit().putFloat("logo_y", value).apply() }, valueRange = 0f..1f)
+            Slider(value = logoPosition.y.coerceIn(-.20f, 1.20f), onValueChange = { value -> logoPosition = logoPosition.copy(y = value); prefs.edit().putFloat("logo_y", value).apply() }, valueRange = -.20f..1.20f)
             Text("Snap logo to a corner", color = Color(0xFFA7ACBC), fontSize = 11.sp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("Top left" to LogoPosition(0f, 0f), "Top right" to LogoPosition(1f, 0f), "Bottom left" to LogoPosition(0f, 1f), "Bottom right" to LogoPosition(1f, 1f)).forEach { (label, target) ->
@@ -545,8 +545,8 @@ private fun DraggableLogo(
         val minX = visibleWidthFraction / 2f
         val minY = visibleHeightFraction / 2f
         val displayPosition = LogoPosition(
-            snapLegacyLogoEdge(position.x, widthFraction / 2f, minX),
-            snapLegacyLogoEdge(position.y, heightFraction / 2f, minY)
+            snapLegacyLogoEdge(position.x, minX),
+            snapLegacyLogoEdge(position.y, minY)
         )
         val latestDisplayPosition = rememberUpdatedState(displayPosition)
         val latestMinX = rememberUpdatedState(minX)
@@ -558,8 +558,8 @@ private fun DraggableLogo(
                     detectTransformGestures { _, pan, zoomChange, _ ->
                         val current = latestDisplayPosition.value
                         val next = LogoPosition(
-                            x = (current.x + pan.x / parentWidth).coerceIn(latestMinX.value, 1f - latestMinX.value),
-                            y = (current.y + pan.y / parentHeight).coerceIn(latestMinY.value, 1f - latestMinY.value)
+                            x = logoPositionFromCenter(current.x + pan.x / parentWidth, latestMinX.value),
+                            y = logoPositionFromCenter(current.y + pan.y / parentHeight, latestMinY.value)
                         )
                         latestOnMove.value(next)
                         latestOnScale.value((latestScale.value * zoomChange).coerceIn(.4f, 2.2f))
@@ -892,21 +892,31 @@ private fun makeLogoOverlay(file: File, position: LogoPosition, scale: Float): B
     val maxHeight = OUTPUT_HEIGHT * .12f * scale.coerceIn(.4f, 2.2f)
     val factor = minOf(maxWidth / source.width, maxHeight / source.height, 1f)
     val width = source.width * factor; val height = source.height * factor
-    val centerX = snapLegacyLogoEdge(position.x, maxWidth / (2f * OUTPUT_WIDTH), width / (2f * OUTPUT_WIDTH))
-    val centerY = snapLegacyLogoEdge(position.y, maxHeight / (2f * OUTPUT_HEIGHT), height / (2f * OUTPUT_HEIGHT))
-    val left = (centerX * OUTPUT_WIDTH - width / 2f).coerceIn(0f, OUTPUT_WIDTH - width)
-    val top = (centerY * OUTPUT_HEIGHT - height / 2f).coerceIn(0f, OUTPUT_HEIGHT - height)
+    val centerX = snapLegacyLogoEdge(position.x, width / (2f * OUTPUT_WIDTH))
+    val centerY = snapLegacyLogoEdge(position.y, height / (2f * OUTPUT_HEIGHT))
+    val left = centerX * OUTPUT_WIDTH - width / 2f
+    val top = centerY * OUTPUT_HEIGHT - height / 2f
     canvas.drawBitmap(source, null, RectF(left, top, left + width, top + height), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
     source.recycle()
     return output
 }
 
-private fun snapLegacyLogoEdge(coordinate: Float, slotHalf: Float, visibleHalf: Float): Float {
-    val tolerance = .004f
+private fun snapLegacyLogoEdge(coordinate: Float, visibleHalf: Float): Float {
+    val half = visibleHalf.coerceIn(0f, .49f)
+    val safeCoordinate = coordinate.coerceIn(-half, 1f + half)
     return when {
-        kotlin.math.abs(coordinate - slotHalf) <= tolerance || kotlin.math.abs(coordinate - visibleHalf) <= tolerance -> visibleHalf
-        kotlin.math.abs(coordinate - (1f - slotHalf)) <= tolerance || kotlin.math.abs(coordinate - (1f - visibleHalf)) <= tolerance -> 1f - visibleHalf
-        else -> coordinate.coerceIn(visibleHalf, 1f - visibleHalf)
+        safeCoordinate < 0f -> half + safeCoordinate
+        safeCoordinate > 1f -> 1f - half + safeCoordinate - 1f
+        else -> half + safeCoordinate * (1f - 2f * half)
+    }
+}
+
+private fun logoPositionFromCenter(center: Float, visibleHalf: Float): Float {
+    val half = visibleHalf.coerceIn(0f, .49f)
+    return when {
+        center < half -> (center - half).coerceAtLeast(-half)
+        center > 1f - half -> (1f + center - (1f - half)).coerceAtMost(1f + half)
+        else -> ((center - half) / (1f - 2f * half).coerceAtLeast(.02f)).coerceIn(0f, 1f)
     }
 }
 
@@ -943,8 +953,8 @@ private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosi
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
-        val centerX = snapLegacyLogoEdge(position.x, maxWidth / (2f * OUTPUT_WIDTH), frameWidth / (2f * OUTPUT_WIDTH))
-        val centerY = snapLegacyLogoEdge(position.y, maxHeight / (2f * OUTPUT_HEIGHT), frameHeight / (2f * OUTPUT_HEIGHT))
+        val centerX = snapLegacyLogoEdge(position.x, frameWidth / (2f * OUTPUT_WIDTH))
+        val centerY = snapLegacyLogoEdge(position.y, frameHeight / (2f * OUTPUT_HEIGHT))
         val x = centerX * 2f - 1f
         val y = 1f - centerY * 2f
         return OverlaySettings.Builder()
