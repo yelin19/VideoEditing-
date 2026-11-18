@@ -89,9 +89,6 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private val Background = Color(0xFF10131B)
 private val Panel = Color(0xFF1A1E29)
@@ -138,13 +135,11 @@ private fun EditorScreen() {
     var borderColorHex by remember { mutableStateOf(prefs.getString("border_color", "#9C7BFF") ?: "#9C7BFF") }
     var scrollingCaption by remember { mutableStateOf("") }
     var subtitleCues by remember { mutableStateOf<List<SubtitleCue>>(emptyList()) }
+    var subtitleScript by remember { mutableStateOf("") }
+    var subtitleOffsetMs by remember { mutableFloatStateOf(0f) }
+    var subtitleFontSp by remember { mutableFloatStateOf(20f) }
+    var subtitlePositionY by remember { mutableFloatStateOf(.83f) }
     var previewPositionMs by remember { mutableLongStateOf(0L) }
-    var modelDownloading by remember { mutableStateOf(false) }
-    var transcriptionRunning by remember { mutableStateOf(false) }
-    var modelReady by remember { mutableStateOf(File(context.filesDir, "nara-sar/.ready").isFile) }
-    var modelDownloadProgress by remember { mutableFloatStateOf(0f) }
-    var modelStatus by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -159,54 +154,21 @@ private fun EditorScreen() {
         }.onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG, JPG, or GIF." }
     }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-                if (uri != null) { videoUri = uri; blurRect = BlurRect(); subtitleCues = emptyList(); previewPositionMs = 0L }
+                if (uri != null) { videoUri = uri; blurRect = BlurRect(); previewPositionMs = 0L }
     }
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         audioUri = uri
         if (uri != null) replacementAudioEnabled = true
     }
     val subtitlePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) runCatching { readSrtCues(context, uri) }
-            .onSuccess { cues -> subtitleCues = cues; message = "Loaded ${cues.size} timed subtitle cues. They will appear in preview and the exported video." }
-            .onFailure { message = it.message ?: "Could not read this SRT subtitle file." }
-    }
-
-    fun downloadModel() {
-        if (modelReady || modelDownloading) return
-        scope.launch {
-            modelDownloading = true; modelDownloadProgress = 0f; modelStatus = "Downloading Nara SAR model (~450 MB)…"
-            try {
-                withContext(Dispatchers.IO) {
-                    NaraSarEngine.ensureModel(context, NaraSarEngine.ProgressListener { item ->
-                        if (item.totalBytes > 0) modelDownloadProgress = item.fraction
-                        modelStatus = "Downloading ${item.file.substringAfterLast('/')} · ${item.downloadedBytes / (1024 * 1024)} MB"
-                    })
-                }
-                modelReady = true; modelStatus = "Myanmar speech model is ready for offline use."
-            } catch (error: Exception) { modelStatus = error.message ?: "Model download failed. Check your internet and try again." }
-            finally { modelDownloading = false }
-        }
-    }
-
-    fun transcribeVideoAudio() {
-        val source = videoUri
-        if (source == null) { modelStatus = "Choose a video first."; return }
-        if (!modelReady) { modelStatus = "Download the Myanmar speech model first."; downloadModel(); return }
-        if (transcriptionRunning) return
-        scope.launch {
-            transcriptionRunning = true; modelStatus = "Transcribing the video's audio…"
-            try {
-                val segments = withContext(Dispatchers.IO) {
-                    NaraSarDecoder(NaraSarEngine.modelDirectory(context)).use { decoder ->
-                        NaraSarEngine.transcribeVideo(context, source, decoder)
-                    }
-                }
-                subtitleCues = makeTwoSecondCues(segments.map { it.copy(text = keepMyanmarSubtitleText(it.text)) })
-                if (subtitleCues.isEmpty()) modelStatus = "No speech was recognized. You can import an SRT subtitle file instead."
-                else { previewPositionMs = 0L; modelStatus = "${subtitleCues.size} subtitle cards created. They change every 2 seconds; review transcript and timing before export." }
-            } catch (error: Exception) { modelStatus = error.message ?: "Transcription failed." }
-            finally { transcriptionRunning = false }
-        }
+        if (uri != null) runCatching {
+            context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                ?: error("Subtitle file could not be opened")
+        }.onSuccess { text ->
+            runCatching { parseSubtitleScript(text) }
+                .onSuccess { cues -> subtitleScript = text; subtitleCues = cues; message = "Loaded ${cues.size} subtitle lines. Adjust the text, timing, size or position below." }
+                .onFailure { message = it.message ?: "Could not read this subtitle file." }
+        }.onFailure { message = it.message ?: "Could not open this subtitle file." }
     }
 
     LaunchedEffect(exporting, activeTransformer) {
@@ -231,6 +193,7 @@ private fun EditorScreen() {
         Spacer(Modifier.height(4.dp))
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1.05f)) {
             val previewWidth = minOf(maxWidth, maxHeight * 9f / 16f)
+            val previewHeight = previewWidth * 16f / 9f
             Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D))) {
                 if (videoUri != null) VideoPreview(videoUri!!, audioUri, mirror, zoom, muteOriginal, videoAudioVolume, replacementAudioEnabled, replacementAudioVolume, Modifier.fillMaxSize(), onPosition = { previewPositionMs = it })
                 if (videoUri == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -261,7 +224,9 @@ private fun EditorScreen() {
                 }
                 if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(7.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, fontSize = 8.sp)
                 if (scrollingCaption.isNotBlank() && videoUri != null) ScrollingCaptionPreview(scrollingCaption, Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(34.dp))
-                subtitleCues.firstOrNull { previewPositionMs in it.startMs until it.endMs }?.let { cue -> TimedSubtitlePreview(cue.text, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 38.dp)) }
+                activeSubtitleCue(subtitleCues, previewPositionMs, subtitleOffsetMs.toLong())?.let { cue ->
+                    TimedSubtitlePreview(cue.text, subtitleFontSp, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = previewHeight * (1f - subtitlePositionY)))
+                }
                 Box(Modifier.fillMaxSize().border(3.dp, Color(AndroidColor.parseColor(borderColorHex)), RoundedCornerShape(18.dp)))
             }
         }
@@ -294,24 +259,35 @@ private fun EditorScreen() {
             label = { Text("Text to scroll across the video") }, placeholder = { Text("Type a message for the scrolling caption") }, singleLine = true)
         Text("The caption scrolls across the bottom in preview and export.", color = Color(0xFF858BA0), fontSize = 11.sp)
         Spacer(Modifier.height(10.dp))
-        SectionTitle("MYANMAR SPEECH SUBTITLES")
-        Text("Create Burmese subtitles from the video's audio. The ASR model downloads only after installation (~450 MB), then works offline.", color = Color(0xFFA7ACBC), fontSize = 12.sp)
-        Text("Powered by Nara SAR", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(6.dp))
-        Button(onClick = { downloadModel() }, enabled = !modelReady && !modelDownloading, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(13.dp)) {
-            Text(when { modelReady -> "Myanmar speech model downloaded"; modelDownloading -> "Downloading model…"; else -> "Download Myanmar speech model" })
+        SectionTitle("SUBTITLES · PASTE OR IMPORT TEXT")
+        Text("Each line: [start - end] subtitle text. Supports mm:ss and hh:mm:ss, with optional decimal seconds.", color = Color(0xFFA7ACBC), fontSize = 12.sp)
+        OutlinedTextField(
+            value = subtitleScript,
+            onValueChange = { subtitleScript = it },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 170.dp, max = 300.dp),
+            label = { Text("Timed subtitle lines") },
+            placeholder = { Text("[00:00 - 00:02.5] မြစ်ကမ်းဘေးမှာ လမ်းလျှောက်လာတဲ့\n[00:02.5 - 00:05.0] မိန်းကလေးဟာ သားရဲကို တွေ့တယ်") },
+            minLines = 6,
+            maxLines = 14
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                runCatching { parseSubtitleScript(subtitleScript) }
+                    .onSuccess { cues -> subtitleCues = cues; previewPositionMs = 0L; message = "Loaded ${cues.size} subtitle lines. Adjust timing, size or position below." }
+                    .onFailure { message = it.message ?: "Check the subtitle line format and timing." }
+            }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(13.dp)) { Text("Apply subtitles") }
+            OutlinedButton(onClick = { subtitlePicker.launch(arrayOf("text/plain", "application/x-subrip", "text/srt", "*/*")) }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(13.dp)) { Text("Import .txt / .srt") }
         }
-        if (modelDownloading) LinearProgressIndicator(progress = { modelDownloadProgress }, modifier = Modifier.fillMaxWidth().padding(top = 5.dp))
-        OutlinedButton(onClick = { transcribeVideoAudio() }, enabled = videoUri != null && modelReady && !transcriptionRunning, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(13.dp)) {
-            Text(if (transcriptionRunning) "Transcribing audio…" else "Generate subtitles from video audio")
+        if (subtitleCues.isNotEmpty()) {
+            Text("${subtitleCues.size} subtitle lines loaded · edit the text above, then Apply again", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+            Text("Timing delay · ${"%+.1f".format(subtitleOffsetMs / 1000f)} sec", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = subtitleOffsetMs, onValueChange = { subtitleOffsetMs = it }, valueRange = -5000f..5000f, steps = 39)
+            Text("Text size · ${subtitleFontSp.roundToInt()} sp", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = subtitleFontSp, onValueChange = { subtitleFontSp = it }, valueRange = 14f..36f, steps = 10)
+            Text("Subtitle vertical position · ${(subtitlePositionY * 100).roundToInt()}% from top", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = subtitlePositionY, onValueChange = { subtitlePositionY = it }, valueRange = .55f.. .94f, steps = 38)
+            TextButton(onClick = { subtitleScript = ""; subtitleCues = emptyList(); subtitleOffsetMs = 0f }) { Text("Remove subtitles") }
         }
-        OutlinedButton(onClick = { subtitlePicker.launch(arrayOf("application/x-subrip", "text/srt", "text/plain", "*/*")) }, modifier = Modifier.fillMaxWidth().height(42.dp), shape = RoundedCornerShape(13.dp)) { Text("Import SRT subtitles") }
-        if (subtitleCues.isNotEmpty()) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("${subtitleCues.size} subtitles · changes every 2 seconds", Modifier.weight(1f), color = Color(0xFFA7ACBC), fontSize = 12.sp)
-            TextButton(onClick = { subtitleCues = emptyList(); previewPositionMs = 0L }) { Text("Remove") }
-        }
-        modelStatus?.let { Text(it, color = if (it.contains("failed", true) || it.contains("error", true)) Color(0xFFFF9C9C) else Color(0xFFBEC2D0), fontSize = 11.sp) }
-        Text("Two-second cue timing is estimated from chunk text, not word-level speech timestamps. Review before export.", color = Color(0xFF858BA0), fontSize = 10.sp)
         Spacer(Modifier.height(10.dp))
         SectionTitle("SUBTITLE COVER")
         SettingSwitch("Show adjustable blur box", "Drag anywhere inside; use the corner handle to resize", blurEnabled) { blurEnabled = it }
@@ -387,7 +363,7 @@ private fun EditorScreen() {
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
                         savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
-                        if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(subtitleCues))))
+                        if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(subtitleCues, subtitleOffsetMs.toLong(), subtitleFontSp * 2f, subtitlePositionY))))
                         add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBorderOverlay(borderColorHex), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
@@ -782,9 +758,9 @@ private fun ScrollingCaptionPreview(text: String, modifier: Modifier = Modifier)
 }
 
 @Composable
-private fun TimedSubtitlePreview(text: String, modifier: Modifier = Modifier) {
+private fun TimedSubtitlePreview(text: String, fontSp: Float, modifier: Modifier = Modifier) {
     Text(text, modifier.clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .82f)).padding(horizontal = 12.dp, vertical = 7.dp),
-        color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+        color = Color.White, fontSize = fontSp.sp, fontWeight = FontWeight.Bold, maxLines = 2)
 }
 
 private fun makeBorderOverlay(colorHex: String): Bitmap {
@@ -823,12 +799,17 @@ private class ScrollingCaptionOverlay(private val text: String) : BitmapOverlay(
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = fullFrameOverlaySettings()
 }
 
-private class TimedSubtitleOverlay(private val cues: List<SubtitleCue>) : BitmapOverlay() {
+private class TimedSubtitleOverlay(
+    private val cues: List<SubtitleCue>,
+    private val offsetMs: Long,
+    fontSizePx: Float,
+    private val verticalPosition: Float
+) : BitmapOverlay() {
     private val bitmap = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
     private val canvas = Canvas(bitmap)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = AndroidColor.WHITE
-        textSize = 40f
+        textSize = fontSizePx.coerceIn(24f, 80f)
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         setShadowLayer(3f, 1f, 2f, AndroidColor.BLACK)
@@ -838,11 +819,12 @@ private class TimedSubtitleOverlay(private val cues: List<SubtitleCue>) : Bitmap
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         bitmap.eraseColor(AndroidColor.TRANSPARENT)
         val timeMs = presentationTimeUs / 1_000L
-        val cue = cues.firstOrNull { timeMs >= it.startMs && timeMs < it.endMs } ?: return bitmap
+        val cue = activeSubtitleCue(cues, timeMs, offsetMs) ?: return bitmap
         val lines = wrapSubtitleText(cue.text, paint, OUTPUT_WIDTH - 72f).take(2)
-        val lineHeight = 48f
+        val lineHeight = paint.textSize * 1.25f
         val boxHeight = lines.size * lineHeight + 28f
-        val top = OUTPUT_HEIGHT - 160f - boxHeight
+        val centerY = verticalPosition.coerceIn(.1f, .95f) * OUTPUT_HEIGHT
+        val top = (centerY - boxHeight / 2f).coerceIn(12f, OUTPUT_HEIGHT - boxHeight - 12f)
         canvas.drawRoundRect(RectF(24f, top, OUTPUT_WIDTH - 24f, top + boxHeight), 18f, 18f, background)
         lines.forEachIndexed { index, line -> canvas.drawText(line, OUTPUT_WIDTH / 2f, top + 38f + index * lineHeight, paint) }
         return bitmap
@@ -1054,56 +1036,62 @@ private fun saveCroppedLogo(context: Context, bitmap: Bitmap): File {
     return target
 }
 
-private fun readSrtCues(context: Context, uri: Uri): List<SubtitleCue> {
-    val contents = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-        ?: error("Subtitle file could not be opened")
-    val blocks = contents.replace("\r\n", "\n").replace('\r', '\n').split(Regex("\\n\\s*\\n"))
-    val timestamp = Regex("(\\d{1,2}):(\\d{2}):(\\d{2})[,\\.](\\d{3})\\s*-->\\s*(\\d{1,2}):(\\d{2}):(\\d{2})[,\\.](\\d{3})")
+private fun parseSubtitleScript(raw: String): List<SubtitleCue> {
+    val normalized = raw.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
+    if (normalized.lineSequence().any { "-->" in it }) return parseSrtText(normalized)
+    val linePattern = Regex("^\\s*\\[([^\\]]+)\\]\\s*(.+?)\\s*$")
+    val cues = ArrayList<SubtitleCue>()
+    normalized.lineSequence().forEachIndexed { index, line ->
+        if (line.isBlank()) return@forEachIndexed
+        val match = linePattern.matchEntire(line)
+            ?: error("Line ${index + 1}: expected [start - end] subtitle text")
+        val range = match.groupValues[1].split('-', limit = 2)
+        if (range.size != 2) error("Line ${index + 1}: use [start - end] before the subtitle text")
+        val start = parseSubtitleTime(range[0].trim())
+        val end = parseSubtitleTime(range[1].trim())
+        if (end <= start) error("Line ${index + 1}: end time must be later than start time")
+        cues += SubtitleCue(start, end, match.groupValues[2].trim())
+    }
+    require(cues.isNotEmpty()) { "Add at least one line in [start - end] subtitle text format." }
+    require(cues.size <= 20_000) { "Subtitle text contains too many lines." }
+    return cues.sortedBy { it.startMs }
+}
+
+private fun parseSubtitleTime(value: String): Long {
+    val parts = value.trim().split(':')
+    require(parts.size in 1..3) { "Invalid time '$value'. Use mm:ss, hh:mm:ss, or seconds." }
+    val secondsPart = parts.last()
+    val secondsWhole = secondsPart.substringBefore('.').toLongOrNull()
+        ?: error("Invalid seconds in '$value'")
+    val fraction = secondsPart.substringAfter('.', "").take(3).padEnd(3, '0').toLongOrNull() ?: 0L
+    require(secondsWhole < 60 || parts.size == 1) { "Seconds must be less than 60 in '$value'." }
+    val preceding = parts.dropLast(1).map { it.toLongOrNull() ?: error("Invalid time '$value'") }
+    if (parts.size == 3) require(preceding.last() < 60) { "Minutes must be less than 60 in '$value'." }
+    val wholeSeconds = when (parts.size) {
+        1 -> secondsWhole
+        2 -> preceding[0] * 60 + secondsWhole
+        else -> preceding[0] * 3600 + preceding[1] * 60 + secondsWhole
+    }
+    return wholeSeconds * 1000 + fraction
+}
+
+private fun parseSrtText(raw: String): List<SubtitleCue> {
+    val blocks = raw.replace("\r\n", "\n").replace('\r', '\n').split(Regex("\\n\\s*\\n"))
+    val timestamp = Regex("(\\d{1,2}:\\d{2}:\\d{2}[,\\.]\\d{1,3})\\s*-->\\s*(\\d{1,2}:\\d{2}:\\d{2}[,\\.]\\d{1,3})")
     val cues = blocks.mapNotNull { block ->
         val lines = block.lines().map(String::trim).filter(String::isNotEmpty)
-        val match = lines.firstNotNullOfOrNull { timestamp.find(it) } ?: return@mapNotNull null
-        val values = (1..8).map { match.groupValues[it].toLong() }
-        fun time(h: Long, m: Long, s: Long, ms: Long) = ((h * 3600 + m * 60 + s) * 1000 + ms)
-        val textIndex = lines.indexOfFirst { timestamp.containsMatchIn(it) } + 1
-        val text = lines.drop(textIndex).joinToString(" ").replace(Regex("<[^>]*>"), "").trim()
-        val start = time(values[0], values[1], values[2], values[3])
-        val end = time(values[4], values[5], values[6], values[7])
+        val lineIndex = lines.indexOfFirst { timestamp.containsMatchIn(it) }
+        if (lineIndex < 0) return@mapNotNull null
+        val match = timestamp.find(lines[lineIndex]) ?: return@mapNotNull null
+        val start = parseSubtitleTime(match.groupValues[1].replace(',', '.'))
+        val end = parseSubtitleTime(match.groupValues[2].replace(',', '.'))
+        val text = lines.drop(lineIndex + 1).joinToString(" ").replace(Regex("<[^>]*>"), "").trim()
         if (text.isBlank() || end <= start) null else SubtitleCue(start, end, text)
     }.sortedBy { it.startMs }
-    require(cues.isNotEmpty()) { "No valid SRT subtitle cues were found." }
-    require(cues.size <= 20_000) { "Subtitle file has too many cues." }
+    require(cues.isNotEmpty()) { "No valid SRT subtitle lines were found." }
+    require(cues.size <= 20_000) { "Subtitle file contains too many lines." }
     return cues
 }
 
-private fun makeTwoSecondCues(segments: List<NaraSarEngine.Segment>): List<SubtitleCue> {
-    val cues = ArrayList<SubtitleCue>()
-    for (segment in segments) {
-        val text = segment.text.trim()
-        if (text.isEmpty()) continue
-        val start = (segment.startSeconds * 1000).toLong().coerceAtLeast(0L)
-        val end = (segment.endSeconds * 1000).toLong().coerceAtLeast(start + 1L)
-        val slotCount = (((end - start) + 1999L) / 2000L).toInt().coerceAtLeast(1)
-        val words = text.split(Regex("\\s+")).filter { it.isNotBlank() }
-        val chunkSize = ((words.size + slotCount - 1) / slotCount).coerceAtLeast(1)
-        val pieces = words.chunked(chunkSize).map { it.joinToString(" ") }.ifEmpty { listOf(text) }
-        pieces.forEachIndexed { index, piece ->
-            val cueStart = start + index * 2_000L
-            if (cueStart < end) cues += SubtitleCue(cueStart, minOf(cueStart + 2_000L, end), piece)
-        }
-    }
-    return cues
-}
-
-private fun keepMyanmarSubtitleText(text: String): String = buildString {
-    var lastWasSpace = true
-    for (character in text) {
-        val isMyanmar = character in '\u1000'..'\u109F' || character in '\uA9E0'..'\uA9FF' || character in '\uAA60'..'\uAA7F'
-        if (isMyanmar || character.isWhitespace() || character in "။၊၊!?.,:;()၀၁၂၃၄၅၆၇၈၉") {
-            append(character)
-            lastWasSpace = character.isWhitespace()
-        } else if (!lastWasSpace && isMyanmar) {
-            append(' ')
-            lastWasSpace = true
-        }
-    }
-}.replace(Regex("\\s+"), " ").trim()
+private fun activeSubtitleCue(cues: List<SubtitleCue>, timeMs: Long, offsetMs: Long): SubtitleCue? =
+    cues.firstOrNull { timeMs >= it.startMs + offsetMs && timeMs < it.endMs + offsetMs }

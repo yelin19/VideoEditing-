@@ -15,14 +15,6 @@ android {
         versionName = "1.0"
     }
     buildFeatures { compose = true }
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = false
-        }
-    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -44,6 +36,5 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.5.1")
     implementation("androidx.media3:media3-transformer:1.5.1")
     implementation("androidx.media3:media3-effect:1.5.1")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
