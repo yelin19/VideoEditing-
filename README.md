@@ -12,7 +12,20 @@ Native Android video editor built with Kotlin, Jetpack Compose and AndroidX Medi
 - Preview plays the selected added audio in sync with the video, loops it to the video length, and follows video play/pause and seeks. Separate switches and volume sliders control the original video sound and added audio. If both are enabled, both are mixed in preview and in the exported video.
 - Draggable/resizable subtitle cover box with expanded movement range, a corner resize grip and adjustable cover strength. Preview coordinates are shared with the 720×1280 export.
 - Selectable colored frame border and editable scrolling caption displayed at the bottom of the preview and rendered video.
-- Selectable colored frame border and editable scrolling caption displayed at the bottom of the preview and rendered video.
+- Myanmar subtitle tools: request a post-install download of Nara SAR's CPU INT8 acoustic model (about 366 MB) and bilingual character language model (about 84 MB), then transcribe the imported video's audio locally. Model files are not bundled in the APK and are checksum-verified in app-private storage. The decoder applies the released CTC beam search, character LM and Burmese syllable constraints; Latin-script output is filtered so generated subtitles focus on Myanmar text.
+- Generated captions are divided into approximate 2-second subtitle cards and appear in preview and MP4 export. Nara SAR does not return word-level timestamps, so the app estimates which words belong in each 2-second interval; review transcript and timing before publishing. Existing `.srt` subtitles with their own timestamps can also be imported, previewed and rendered accurately.
+
+## Standalone audio transcription
+
+For a separate audio file, download the compact INT8 inference package and pass the local audio path to the official runner. The package includes the acoustic model, matching tokenizer/config, language model, decoder, inference script and license/attribution files. The redundant 1.3 GB FP32 weight/ONNX files are not needed for INT8 inference.
+
+```bash
+python3 tools/nara_sar/download_model.py
+python3 -m pip install -r tools/nara_sar/model/requirements.txt
+python3 tools/nara_sar/run_transcribe.py /path/to/your-audio.wav
+```
+
+The user did not attach an audio file or provide an audio link in this request, so no real recording was transcribed here. The command above is ready to run once the audio file is available.
 
 ## Important limitation
 
@@ -26,4 +39,4 @@ Open the repository in Android Studio (AGP 8.7.3, Kotlin 2.0.21, JDK 17) and bui
 ./gradlew assembleDebug
 ```
 
-Debug APK path: `app/build/outputs/apk/debug/app-debug.apk`.
+The build creates separate `arm64-v8a` and `armeabi-v7a` debug APKs under `app/build/outputs/apk/debug/`, so each APK includes only its matching ONNX Runtime native library. Nara SAR model weights are not part of either APK; users download them from the editor after installation.

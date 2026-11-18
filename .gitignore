@@ -33,3 +33,7 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Downloaded Nara SAR model assets are fetched after installation, never bundled in APK/Git.
+tools/nara_sar/model/
+tools/nara_sar/.venv/
