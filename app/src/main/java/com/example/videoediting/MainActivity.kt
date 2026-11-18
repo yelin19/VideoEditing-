@@ -30,6 +30,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -101,7 +102,6 @@ private const val OUTPUT_VIDEO_BITRATE = 1_200_000
 private const val OUTPUT_AUDIO_BITRATE = 96_000
 private data class BlurRect(val x: Float = .22f, val y: Float = .70f, val w: Float = .56f, val h: Float = .11f)
 private data class LogoPosition(val x: Float = .86f, val y: Float = .92f)
-private data class CropRect(val x: Float = .1f, val y: Float = .1f, val w: Float = .8f, val h: Float = .8f)
 private data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
 
 class MainActivity : ComponentActivity() {
@@ -117,10 +117,6 @@ private fun EditorScreen() {
     val density = LocalDensity.current
     val prefs = remember { context.getSharedPreferences("video_editing", Context.MODE_PRIVATE) }
     var savedLogo by remember { mutableStateOf(readValidLogo(prefs)) }
-    var savedLogoCrop by remember { mutableStateOf(readLogoCrop(prefs)) }
-    var logoCropBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var logoCropUri by remember { mutableStateOf<Uri?>(null) }
-    var logoCropIsGif by remember { mutableStateOf(false) }
     var videoUri by remember { mutableStateOf<Uri?>(null) }
     var audioUri by remember { mutableStateOf<Uri?>(null) }
     var mirror by remember { mutableStateOf(false) }
@@ -155,11 +151,15 @@ private fun EditorScreen() {
     var tempOutput by remember { mutableStateOf<File?>(null) }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) runCatching {
-            logoCropIsGif = context.contentResolver.getType(uri)?.contains("gif", ignoreCase = true) == true || uri.lastPathSegment?.substringAfterLast('.', "")?.equals("gif", true) == true
-            logoCropBitmap = decodeLogoForCrop(context, uri)
-            logoCropUri = uri
-        }.onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG, JPG, or GIF." }
+        if (uri != null) runCatching { saveLogoPermanently(context, uri) }
+            .onSuccess { file ->
+                savedLogo = file
+                logoPosition = LogoPosition()
+                logoScale = 1f
+                prefs.edit().putString("custom_logo_path", file.absolutePath).putFloat("logo_x", logoPosition.x).putFloat("logo_y", logoPosition.y).putFloat("logo_scale", 1f)
+                    .remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply()
+            }
+            .onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG, JPG, or GIF." }
     }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) { videoUri = uri; blurRect = BlurRect(); previewPositionMs = 0L; subtitlePreviewRestartKey++ }
@@ -222,7 +222,7 @@ private fun EditorScreen() {
                         animatedDrawable?.apply { repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE; start() }
                         onDispose { animatedDrawable?.stop() }
                     }
-                    if (bitmap != null || animatedDrawable != null) DraggableLogo(bitmap, animatedDrawable, savedLogoCrop, logoPosition, logoScale, Modifier.fillMaxSize(), onMove = { next ->
+                    if (bitmap != null || animatedDrawable != null) DraggableLogo(bitmap, animatedDrawable, logoPosition, logoScale, Modifier.fillMaxSize(), onMove = { next ->
                         logoPosition = next
                         prefs.edit().putFloat("logo_x", next.x).putFloat("logo_y", next.y).apply()
                     }, onScale = { next ->
@@ -354,13 +354,13 @@ private fun EditorScreen() {
                 Text(if (savedLogo == null) "No logo selected" else "Custom logo saved", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Text("Stored separately on this device · automatically added to previews and exports", color = Color(0xFFA7ACBC), fontSize = 11.sp)
             }
-            if (savedLogo != null) IconButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = null; savedLogoCrop = null }) { Icon(Icons.Default.Close, "Remove Logo", tint = Color(0xFFCF9DA6)) }
+            if (savedLogo != null) IconButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = null }) { Icon(Icons.Default.Close, "Remove Logo", tint = Color(0xFFCF9DA6)) }
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(14.dp)) {
             Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(7.dp)); Text(if (savedLogo == null) "Choose Logo" else "Change Logo")
         }
-        Text("PNG/JPG are still images. GIF logos animate and loop throughout the exported video.", color = Color(0xFF858BA0), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+        Text("PNG/JPG are still images. GIF logos animate and loop. Drag the logo in the preview to move; pinch with two fingers to resize.", color = Color(0xFF858BA0), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
         if (savedLogo != null) TextButton(onClick = {
             logoPosition = LogoPosition()
             logoScale = 1f
@@ -380,7 +380,7 @@ private fun EditorScreen() {
                 }
             }
         }
-        if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = null; savedLogoCrop = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Remove Logo", color = Color(0xFFCF9DA6)) }
+        if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Remove Logo", color = Color(0xFFCF9DA6)) }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -400,7 +400,7 @@ private fun EditorScreen() {
                         add(Presentation.createForWidthAndHeight(OUTPUT_WIDTH, OUTPUT_HEIGHT, Presentation.LAYOUT_SCALE_TO_FIT))
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
-                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale, savedLogoCrop)))) }
+                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
                         if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(
                             subtitleCues, subtitleOffsetMs.toLong(), subtitleRenderFontPx, subtitleColorHex, subtitlePositionX, subtitlePositionY
@@ -452,121 +452,11 @@ private fun EditorScreen() {
         Spacer(Modifier.height(24.dp))
         }
     }
-    logoCropBitmap?.let { sourceBitmap ->
-        LogoCropDialog(
-            bitmap = sourceBitmap,
-            isGif = logoCropIsGif,
-            onDismiss = { logoCropBitmap = null; logoCropUri = null },
-            onUseOriginal = {
-                runCatching { saveLogoPermanently(context, requireNotNull(logoCropUri)) }
-                    .onSuccess { file -> prefs.edit().putString("custom_logo_path", file.absolutePath).remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = file; savedLogoCrop = null }
-                    .onFailure { message = it.message ?: "Couldn't save this logo." }
-                logoCropBitmap = null; logoCropUri = null
-            },
-            onCrop = { crop ->
-                runCatching {
-                    if (logoCropIsGif) saveLogoPermanently(context, requireNotNull(logoCropUri)) else {
-                        val left = (crop.x * sourceBitmap.width).toInt().coerceIn(0, sourceBitmap.width - 1)
-                        val top = (crop.y * sourceBitmap.height).toInt().coerceIn(0, sourceBitmap.height - 1)
-                        val width = (crop.w * sourceBitmap.width).toInt().coerceIn(1, sourceBitmap.width - left)
-                        val height = (crop.h * sourceBitmap.height).toInt().coerceIn(1, sourceBitmap.height - top)
-                        saveCroppedLogo(context, Bitmap.createBitmap(sourceBitmap, left, top, width, height))
-                    }
-                }.onSuccess { file ->
-                    val edit = prefs.edit().putString("custom_logo_path", file.absolutePath)
-                    if (logoCropIsGif) edit.putFloat("logo_crop_x", crop.x).putFloat("logo_crop_y", crop.y).putFloat("logo_crop_w", crop.w).putFloat("logo_crop_h", crop.h)
-                    else edit.remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h")
-                    edit.apply(); savedLogo = file; savedLogoCrop = if (logoCropIsGif) crop else null
-                }
-                    .onFailure { message = it.message ?: "Couldn't crop this logo." }
-                logoCropBitmap = null; logoCropUri = null
-            }
-        )
-    }
     message?.let { text -> AlertDialog(onDismissRequest = { message = null }, confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } }, title = { Text(if (text.startsWith("Video exported")) "Export complete" else "Notice") }, text = { Text(text) } ) }
 }
 
 @Composable
 private fun SectionTitle(text: String) { Text(text, color = Color(0xFFA7ACBC), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp, modifier = Modifier.padding(bottom = 5.dp)) }
-
-@Composable
-private fun LogoCropDialog(bitmap: Bitmap, isGif: Boolean, onDismiss: () -> Unit, onUseOriginal: () -> Unit, onCrop: (CropRect) -> Unit) {
-    var cropRect by remember(bitmap) { mutableStateOf(CropRect()) }
-    val aspectRatio = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(Modifier.fillMaxWidth().widthIn(max = 480.dp), shape = RoundedCornerShape(22.dp), color = Panel) {
-            Column(Modifier.fillMaxWidth().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Crop your logo", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("Drag inside the box to move it; drag the corner to resize.", color = Color(0xFFBEC2D0), fontSize = 12.sp)
-                BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) {
-                    val imageWidth = minOf(maxWidth, 300.dp * aspectRatio)
-                    val imageHeight = imageWidth / aspectRatio
-                    BoxWithConstraints(Modifier.size(imageWidth, imageHeight).clip(RoundedCornerShape(8.dp))) {
-                        val parentWidth = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-                        val parentHeight = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-                        val current = rememberUpdatedState(cropRect)
-                        val updateCrop = rememberUpdatedState<(CropRect) -> Unit> { cropRect = it }
-                        androidx.compose.foundation.Image(bitmap.asImageBitmap(), "Logo crop preview", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
-                        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                            val left = size.width * cropRect.x
-                            val top = size.height * cropRect.y
-                            val right = size.width * (cropRect.x + cropRect.w)
-                            val bottom = size.height * (cropRect.y + cropRect.h)
-                            val shade = Color.Black.copy(alpha = .58f)
-                            drawRect(shade, topLeft = Offset.Zero, size = androidx.compose.ui.geometry.Size(size.width, top))
-                            drawRect(shade, topLeft = Offset(0f, bottom), size = androidx.compose.ui.geometry.Size(size.width, size.height - bottom))
-                            drawRect(shade, topLeft = Offset(0f, top), size = androidx.compose.ui.geometry.Size(left, bottom - top))
-                            drawRect(shade, topLeft = Offset(right, top), size = androidx.compose.ui.geometry.Size(size.width - right, bottom - top))
-                            drawRect(Color.White, topLeft = Offset(left, top), size = androidx.compose.ui.geometry.Size(right - left, bottom - top), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()))
-                            for (index in 1..2) {
-                                val gx = left + (right - left) * index / 3f
-                                val gy = top + (bottom - top) * index / 3f
-                                drawLine(Color.White.copy(alpha = .55f), Offset(gx, top), Offset(gx, bottom), strokeWidth = 1.dp.toPx())
-                                drawLine(Color.White.copy(alpha = .55f), Offset(left, gy), Offset(right, gy), strokeWidth = 1.dp.toPx())
-                            }
-                        }
-                        Box(
-                            Modifier.offset { IntOffset((parentWidth * cropRect.x).roundToInt(), (parentHeight * cropRect.y).roundToInt()) }
-                                .size(maxWidth * cropRect.w, maxHeight * cropRect.h)
-                                .pointerInput(parentWidth, parentHeight) {
-                                    var moving: CropRect? = null
-                                    detectDragGestures(onDragStart = { moving = current.value }, onDragEnd = { moving = null }, onDragCancel = { moving = null }) { change, drag ->
-                                        change.consume()
-                                        val start = moving ?: current.value
-                                        val next = start.copy(x = (start.x + drag.x / parentWidth).coerceIn(0f, 1f - start.w), y = (start.y + drag.y / parentHeight).coerceIn(0f, 1f - start.h))
-                                        moving = next
-                                        updateCrop.value(next)
-                                    }
-                                }
-                        ) {
-                            Box(Modifier.fillMaxSize())
-                            Box(Modifier.align(Alignment.BottomEnd).size(34.dp).background(Accent, RoundedCornerShape(topStart = 9.dp))
-                                .pointerInput(parentWidth, parentHeight) {
-                                    var resizing: CropRect? = null
-                                    detectDragGestures(onDragStart = { resizing = current.value }, onDragEnd = { resizing = null }, onDragCancel = { resizing = null }) { change, drag ->
-                                        change.consume()
-                                        val start = resizing ?: current.value
-                                        val nextW = (start.w + drag.x / parentWidth).coerceIn(.12f, 1f - start.x)
-                                        val nextH = (start.h + drag.y / parentHeight).coerceIn(.12f, 1f - start.y)
-                                        val next = start.copy(w = nextW, h = nextH)
-                                        resizing = next
-                                        updateCrop.value(next)
-                                    }
-                                }, contentAlignment = Alignment.Center) { Text("↘", color = Color.White, fontWeight = FontWeight.Bold) }
-                        }
-                    }
-                }
-                if (isGif) Text("GIF crops keep the original animation and loop. Choose Keep animated to use the uncropped logo.", color = Color(0xFFFFD78A), fontSize = 11.sp)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
-                    TextButton(onClick = onUseOriginal) { Text(if (isGif) "Keep animated" else "Use full image") }
-                    Button(onClick = { onCrop(cropRect) }) { Text("Crop & Save") }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -633,7 +523,6 @@ private fun InteractiveBlurBox(rect: BlurRect, blurStrength: Float, modifier: Mo
 private fun DraggableLogo(
     bitmap: androidx.compose.ui.graphics.ImageBitmap?,
     animatedDrawable: android.graphics.drawable.AnimatedImageDrawable?,
-    cropRect: CropRect?,
     position: LogoPosition,
     scale: Float,
     modifier: Modifier,
@@ -648,8 +537,8 @@ private fun DraggableLogo(
         val parentHeight = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val widthFraction = .22f * scale
         val heightFraction = .12f * scale
-        val sourceWidth = (bitmap?.width ?: animatedDrawable?.intrinsicWidth ?: 1).coerceAtLeast(1) * (cropRect?.w ?: 1f)
-        val sourceHeight = (bitmap?.height ?: animatedDrawable?.intrinsicHeight ?: 1).coerceAtLeast(1) * (cropRect?.h ?: 1f)
+        val sourceWidth = (bitmap?.width ?: animatedDrawable?.intrinsicWidth ?: 1).coerceAtLeast(1).toFloat()
+        val sourceHeight = (bitmap?.height ?: animatedDrawable?.intrinsicHeight ?: 1).coerceAtLeast(1).toFloat()
         val fitScale = minOf(parentWidth * widthFraction / sourceWidth, parentHeight * heightFraction / sourceHeight)
         val visibleWidthFraction = sourceWidth * fitScale / parentWidth
         val visibleHeightFraction = sourceHeight * fitScale / parentHeight
@@ -660,24 +549,20 @@ private fun DraggableLogo(
             snapLegacyLogoEdge(position.y, heightFraction / 2f, minY)
         )
         val latestDisplayPosition = rememberUpdatedState(displayPosition)
+        val latestMinX = rememberUpdatedState(minX)
+        val latestMinY = rememberUpdatedState(minY)
         Box(
             Modifier.offset { IntOffset((parentWidth * (displayPosition.x - widthFraction / 2f)).roundToInt(), (parentHeight * (displayPosition.y - heightFraction / 2f)).roundToInt()) }
                 .width(maxWidth * widthFraction).height(maxHeight * heightFraction)
                 .pointerInput(parentWidth, parentHeight) {
-                    var draggedPosition: LogoPosition? = null
-                    detectDragGestures(
-                        onDragStart = { draggedPosition = latestDisplayPosition.value },
-                        onDragEnd = { draggedPosition = null },
-                        onDragCancel = { draggedPosition = null }
-                    ) { change, drag ->
-                        change.consume()
-                        val current = draggedPosition ?: latestDisplayPosition.value
+                    detectTransformGestures { _, pan, zoomChange, _ ->
+                        val current = latestDisplayPosition.value
                         val next = LogoPosition(
-                            x = (current.x + drag.x / parentWidth).coerceIn(minX, 1f - minX),
-                            y = (current.y + drag.y / parentHeight).coerceIn(minY, 1f - minY)
+                            x = (current.x + pan.x / parentWidth).coerceIn(latestMinX.value, 1f - latestMinX.value),
+                            y = (current.y + pan.y / parentHeight).coerceIn(latestMinY.value, 1f - latestMinY.value)
                         )
-                        draggedPosition = next
                         latestOnMove.value(next)
+                        latestOnScale.value((latestScale.value * zoomChange).coerceIn(.4f, 2.2f))
                     }
                 },
             contentAlignment = Alignment.Center
@@ -687,40 +572,10 @@ private fun DraggableLogo(
             } else if (animatedDrawable != null) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
-                    factory = { viewContext -> ImageView(viewContext).apply { scaleType = if (cropRect == null) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.MATRIX; setImageDrawable(animatedDrawable) } },
-                    update = { imageView ->
-                        imageView.scaleType = if (cropRect == null) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.MATRIX
-                        if (imageView.drawable !== animatedDrawable) imageView.setImageDrawable(animatedDrawable)
-                        val crop = cropRect
-                        if (crop != null) imageView.post {
-                            val drawable = imageView.drawable ?: return@post
-                            val sourceWidth = drawable.intrinsicWidth.coerceAtLeast(1).toFloat()
-                            val sourceHeight = drawable.intrinsicHeight.coerceAtLeast(1).toFloat()
-                            val left = crop.x * sourceWidth; val top = crop.y * sourceHeight
-                            val width = crop.w * sourceWidth; val height = crop.h * sourceHeight
-                            val factor = minOf(imageView.width / width, imageView.height / height)
-                            val offsetX = (imageView.width - width * factor) / 2f
-                            val offsetY = (imageView.height - height * factor) / 2f
-                            imageView.imageMatrix = android.graphics.Matrix().apply {
-                                setScale(factor, factor)
-                                postTranslate(offsetX - left * factor, offsetY - top * factor)
-                            }
-                        }
-                    }
+                    factory = { viewContext -> ImageView(viewContext).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setImageDrawable(animatedDrawable) } },
+                    update = { imageView -> if (imageView.drawable !== animatedDrawable) imageView.setImageDrawable(animatedDrawable) }
                 )
             }
-            Box(
-                Modifier.align(Alignment.BottomEnd).size(28.dp).background(Accent.copy(alpha = .96f), RoundedCornerShape(topStart = 8.dp))
-                    .pointerInput(parentWidth, parentHeight) {
-                        var currentScale = scale
-                        detectDragGestures { change, drag ->
-                            change.consume()
-                            currentScale = (currentScale + drag.x / parentWidth * 1.5f + drag.y / parentHeight * 1.5f).coerceIn(.4f, 2.2f)
-                            latestOnScale.value(currentScale)
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) { Text("↘", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
         }
     }
 }
@@ -1055,26 +910,22 @@ private fun snapLegacyLogoEdge(coordinate: Float, slotHalf: Float, visibleHalf: 
     }
 }
 
-private fun createLogoOverlay(file: File, position: LogoPosition, scale: Float, cropRect: CropRect?): BitmapOverlay {
+private fun createLogoOverlay(file: File, position: LogoPosition, scale: Float): BitmapOverlay {
     return if (file.extension.equals("gif", ignoreCase = true)) {
-        LoopingGifBitmapOverlay(file, position, scale, cropRect)
+        LoopingGifBitmapOverlay(file, position, scale)
     } else {
         BitmapOverlay.createStaticBitmapOverlay(makeLogoOverlay(file, position, scale), fullFrameOverlaySettings())
     }
 }
 
-private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosition, scale: Float, crop: CropRect?) : BitmapOverlay() {
+private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosition, scale: Float) : BitmapOverlay() {
     private val movie = Movie.decodeFile(file.absolutePath) ?: error("This GIF could not be decoded")
     private val durationMs = movie.duration().coerceAtLeast(100)
     private val maxWidth = OUTPUT_WIDTH * .22f * scale.coerceIn(.4f, 2.2f)
     private val maxHeight = OUTPUT_HEIGHT * .12f * scale.coerceIn(.4f, 2.2f)
-    private val cropLeft = ((crop?.x ?: 0f).coerceIn(0f, .99f) * movie.width()).roundToInt()
-    private val cropTop = ((crop?.y ?: 0f).coerceIn(0f, .99f) * movie.height()).roundToInt()
-    private val cropWidth = ((crop?.w ?: 1f).coerceIn(.01f, 1f) * movie.width()).roundToInt().coerceAtLeast(1).coerceAtMost(movie.width() - cropLeft)
-    private val cropHeight = ((crop?.h ?: 1f).coerceIn(.01f, 1f) * movie.height()).roundToInt().coerceAtLeast(1).coerceAtMost(movie.height() - cropTop)
-    private val bitmapScale = minOf(maxWidth / cropWidth, maxHeight / cropHeight, 1f)
-    private val frameWidth = (cropWidth * bitmapScale).roundToInt().coerceAtLeast(1)
-    private val frameHeight = (cropHeight * bitmapScale).roundToInt().coerceAtLeast(1)
+    private val bitmapScale = minOf(maxWidth / movie.width().coerceAtLeast(1), maxHeight / movie.height().coerceAtLeast(1), 1f)
+    private val frameWidth = (movie.width() * bitmapScale).roundToInt().coerceAtLeast(1)
+    private val frameHeight = (movie.height() * bitmapScale).roundToInt().coerceAtLeast(1)
     private val frameBitmap = Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888)
     private val canvas = Canvas(frameBitmap)
 
@@ -1084,7 +935,6 @@ private class LoopingGifBitmapOverlay(file: File, private val position: LogoPosi
         frameBitmap.eraseColor(AndroidColor.TRANSPARENT)
         canvas.save()
         canvas.scale(frameWidth / movie.width().toFloat(), frameHeight / movie.height().toFloat())
-        canvas.translate(-cropLeft.toFloat(), -cropTop.toFloat())
         movie.draw(canvas, 0f, 0f)
         canvas.restore()
         // Media3 may cache the overlay texture by Bitmap identity. Return a new snapshot
@@ -1169,14 +1019,6 @@ private fun readValidLogo(prefs: android.content.SharedPreferences): File? {
     return File(path).takeIf { it.isFile && it.length() > 0 }
 }
 
-private fun readLogoCrop(prefs: android.content.SharedPreferences): CropRect? {
-    if (!prefs.contains("logo_crop_x")) return null
-    return CropRect(
-        prefs.getFloat("logo_crop_x", 0f), prefs.getFloat("logo_crop_y", 0f),
-        prefs.getFloat("logo_crop_w", 1f), prefs.getFloat("logo_crop_h", 1f)
-    )
-}
-
 private fun decodeLogoPreview(file: File): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.absolutePath, bounds)
@@ -1206,25 +1048,6 @@ private fun saveLogoPermanently(context: Context, uri: Uri): File {
     check(temp.renameTo(finalFile)) { "Unable to save image" }
     directory.listFiles()?.filter { it != finalFile }?.forEach { it.delete() }
     return finalFile
-}
-
-private fun decodeLogoForCrop(context: Context, uri: Uri): Bitmap {
-    val source = ImageDecoder.createSource(context.contentResolver, uri)
-    return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-        val maxSide = 2048
-        val factor = minOf(1f, maxSide.toFloat() / maxOf(info.size.width, info.size.height))
-        if (factor < 1f) decoder.setTargetSize((info.size.width * factor).roundToInt().coerceAtLeast(1), (info.size.height * factor).roundToInt().coerceAtLeast(1))
-    }
-}
-
-private fun saveCroppedLogo(context: Context, bitmap: Bitmap): File {
-    val directory = File(context.filesDir, "custom-logo").apply { mkdirs() }
-    val target = File(directory, "logo-${UUID.randomUUID()}.png")
-    FileOutputStream(target).use { output -> check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "Unable to encode the cropped logo" } }
-    check(target.length() > 0L) { "Cropped logo is empty" }
-    directory.listFiles()?.filter { it != target }?.forEach { it.delete() }
-    return target
 }
 
 private fun parseSubtitleScript(raw: String): List<SubtitleCue> {
