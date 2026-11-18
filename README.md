@@ -11,7 +11,7 @@ Native Android video editor built with Kotlin, Jetpack Compose and AndroidX Medi
 - Separate original-video and added-audio play/mute/volume controls; added audio can loop and mix with the video audio.
 - Draggable/resizable subtitle-cover box with adjustable opacity. Note: this is a translucent cover, not optical region-only blur.
 - Paste/edit timed subtitle lines directly in the app or import `.txt`/`.srt`. Plain-text format: `[start - end] subtitle text`, for example `[00:00 - 00:02.5] မြစ်ကမ်းဘေးမှာ လမ်းလျှောက်လာတဲ့`. Supports `mm:ss`, `hh:mm:ss` and decimal seconds. Applying subtitles pauses and seeks the preview to zero so the first `00:00` cue is visible; the app uses every cue's own time in preview and export.
-- Subtitles use a compact, centered, maximum two-line style. Drag the subtitle frame directly on the preview to move it; drag its corner grip to resize. Sliders below provide precise size and X/Y position adjustment, plus a global timing-delay control. Individual words or timestamps can be edited in the text field and applied again. Export uses the measured preview canvas to scale font, padding, line breaks and position to 720p.
+- Subtitles use clean, borderless text in a compact, centered, maximum two-line style. Drag the text directly on the preview to move it. Sliders provide size control from 8sp upward, selectable saved text colors, X/Y position and global timing delay. Export scales the selected font, line breaks and position from the measured preview canvas to 720p.
 
 Automatic speech-to-text/model downloading has been removed. Subtitles are supplied by the user as editable timed text or an SRT file.
 

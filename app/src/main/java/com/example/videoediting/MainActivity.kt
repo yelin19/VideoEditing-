@@ -140,7 +140,8 @@ private fun EditorScreen() {
     var subtitleCues by remember { mutableStateOf<List<SubtitleCue>>(emptyList()) }
     var subtitleScript by remember { mutableStateOf("") }
     var subtitleOffsetMs by remember { mutableFloatStateOf(0f) }
-    var subtitleFontSp by remember { mutableFloatStateOf(16f) }
+    var subtitleFontSp by remember { mutableFloatStateOf(12f) }
+    var subtitleColorHex by remember { mutableStateOf(prefs.getString("subtitle_color", "#FFFFFF") ?: "#FFFFFF") }
     var subtitlePositionX by remember { mutableFloatStateOf(.5f) }
     var subtitlePositionY by remember { mutableFloatStateOf(.83f) }
     var subtitlePreviewRestartKey by remember { mutableIntStateOf(0) }
@@ -231,9 +232,8 @@ private fun EditorScreen() {
                 if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(7.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, fontSize = 8.sp)
                 if (scrollingCaption.isNotBlank() && videoUri != null) ScrollingCaptionPreview(scrollingCaption, Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(34.dp))
                 activeSubtitleCue(subtitleCues, previewPositionMs, subtitleOffsetMs.toLong())?.let { cue ->
-                    InteractiveTimedSubtitle(cue.text, subtitleFontSp, subtitlePositionX, subtitlePositionY, Modifier.fillMaxSize(),
-                        onMove = { x, y -> subtitlePositionX = x; subtitlePositionY = y },
-                        onResize = { subtitleFontSp = it })
+                    InteractiveTimedSubtitle(cue.text, subtitleFontSp, subtitleColorHex, subtitlePositionX, subtitlePositionY, Modifier.fillMaxSize(),
+                        onMove = { x, y -> subtitlePositionX = x; subtitlePositionY = y })
                 }
                 Box(Modifier.fillMaxSize().border(3.dp, Color(AndroidColor.parseColor(borderColorHex)), RoundedCornerShape(18.dp)))
             }
@@ -288,11 +288,19 @@ private fun EditorScreen() {
         }
         if (subtitleCues.isNotEmpty()) {
             Text("${subtitleCues.size} subtitle lines loaded · edit the text above, then Apply again", color = Color(0xFFA7ACBC), fontSize = 11.sp)
-            Text("Touch and drag the subtitle on the preview to move it; drag its ↘ corner to resize.", color = Accent, fontSize = 11.sp)
+            Text("Drag the subtitle text on the preview to move it. Adjust its size with the slider below.", color = Accent, fontSize = 11.sp)
             Text("Timing delay · ${"%+.1f".format(subtitleOffsetMs / 1000f)} sec", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Slider(value = subtitleOffsetMs, onValueChange = { subtitleOffsetMs = it }, valueRange = -5000f..5000f, steps = 39)
             Text("Subtitle size · ${subtitleFontSp.roundToInt()} sp", color = Color(0xFFBEC2D0), fontSize = 12.sp)
-            Slider(value = subtitleFontSp, onValueChange = { subtitleFontSp = it }, valueRange = 12f..28f, steps = 15)
+            Slider(value = subtitleFontSp, onValueChange = { subtitleFontSp = it }, valueRange = 8f..28f, steps = 19)
+            Text("Subtitle text color", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf("#FFFFFF", "#FFF176", "#80DEEA", "#FF8A80", "#A5D6A7", "#F48FB1").forEach { hex ->
+                    Box(Modifier.size(30.dp).clip(RoundedCornerShape(15.dp)).background(Color(AndroidColor.parseColor(hex)))
+                        .then(if (hex == subtitleColorHex) Modifier.border(3.dp, Accent, RoundedCornerShape(15.dp)) else Modifier)
+                        .clickable { subtitleColorHex = hex; prefs.edit().putString("subtitle_color", hex).apply() })
+                }
+            }
             Text("Horizontal position · ${(subtitlePositionX * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Slider(value = subtitlePositionX, onValueChange = { subtitlePositionX = it }, valueRange = .08f.. .92f, steps = 41)
             Text("Vertical position · ${(subtitlePositionY * 100).roundToInt()}% from top", color = Color(0xFFBEC2D0), fontSize = 12.sp)
@@ -366,10 +374,6 @@ private fun EditorScreen() {
                 runCatching {
                     val subtitleRenderScale = if (previewCanvasWidthPx > 0f) OUTPUT_WIDTH / previewCanvasWidthPx else 2f
                     val subtitleRenderFontPx = with(density) { subtitleFontSp.sp.toPx() } * subtitleRenderScale
-                    val subtitlePaddingStartPx = with(density) { 10.dp.toPx() } * subtitleRenderScale
-                    val subtitlePaddingEndPx = with(density) { 24.dp.toPx() } * subtitleRenderScale
-                    val subtitleVerticalPaddingPx = with(density) { 6.dp.toPx() } * subtitleRenderScale
-                    val subtitleCornerRadiusPx = with(density) { 8.dp.toPx() } * subtitleRenderScale
                     val temp = File(context.cacheDir, "export-${UUID.randomUUID()}.mp4")
                     tempOutput = temp
                     val outputEffects = buildList {
@@ -381,9 +385,7 @@ private fun EditorScreen() {
                         savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
                         if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(
-                            subtitleCues, subtitleOffsetMs.toLong(), subtitleRenderFontPx,
-                            subtitlePaddingStartPx, subtitlePaddingEndPx, subtitleVerticalPaddingPx, subtitleCornerRadiusPx,
-                            subtitlePositionX, subtitlePositionY
+                            subtitleCues, subtitleOffsetMs.toLong(), subtitleRenderFontPx, subtitleColorHex, subtitlePositionX, subtitlePositionY
                         ))))
                         add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBorderOverlay(borderColorHex), fullFrameOverlaySettings()))))
                     }
@@ -800,79 +802,61 @@ private fun ScrollingCaptionPreview(text: String, modifier: Modifier = Modifier)
 private fun InteractiveTimedSubtitle(
     text: String,
     fontSp: Float,
+    textColorHex: String,
     positionX: Float,
     positionY: Float,
     modifier: Modifier = Modifier,
-    onMove: (Float, Float) -> Unit,
-    onResize: (Float) -> Unit
+    onMove: (Float, Float) -> Unit
 ) {
     BoxWithConstraints(modifier) {
-        val density = LocalDensity.current.density
         val localDensity = LocalDensity.current
         val canvasWidthPx = with(localDensity) { maxWidth.toPx() }.coerceAtLeast(1f)
         val canvasHeightPx = with(LocalDensity.current) { maxHeight.toPx() }.coerceAtLeast(1f)
-        val resizeGripPx = with(LocalDensity.current) { 30.dp.toPx() }
         val fontSizePx = with(localDensity) { fontSp.sp.toPx() }
-        val horizontalPaddingPx = with(localDensity) { 34.dp.toPx() }
-        val displayText = remember(text, fontSizePx, canvasWidthPx, horizontalPaddingPx) {
+        val displayText = remember(text, fontSizePx, canvasWidthPx) {
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 textSize = fontSizePx
                 typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             }
-            val maxTextWidth = (canvasWidthPx * .78f - horizontalPaddingPx).coerceAtLeast(1f)
+            val maxTextWidth = (canvasWidthPx * .78f).coerceAtLeast(1f)
             wrapSubtitleText(text, paint, maxTextWidth).let { lines ->
                 (if (lines.size <= 2) lines else listOf(lines.first(), lines.drop(1).joinToString(" "))).joinToString("\n")
             }
         }
         val currentX = rememberUpdatedState(positionX)
         val currentY = rememberUpdatedState(positionY)
-        val currentFont = rememberUpdatedState(fontSp)
         val moveCallback = rememberUpdatedState(onMove)
-        val resizeCallback = rememberUpdatedState(onResize)
 
         Box(
             Modifier.align(Alignment.Center)
                 .offset(x = maxWidth * (positionX - .5f), y = maxHeight * (positionY - .5f))
                 .widthIn(max = maxWidth * .78f)
-                .pointerInput(canvasWidthPx, canvasHeightPx, resizeGripPx) {
-                    var resizing = false
+                .pointerInput(canvasWidthPx, canvasHeightPx) {
                     var dragX = 0f
                     var dragY = 0f
                     var startX = positionX
                     var startY = positionY
-                    var startFont = fontSp
                     detectDragGestures(
-                        onDragStart = { point ->
-                            resizing = point.x >= size.width - resizeGripPx && point.y >= size.height - resizeGripPx
+                        onDragStart = {
                             dragX = 0f
                             dragY = 0f
                             startX = currentX.value
                             startY = currentY.value
-                            startFont = currentFont.value
                         }
                     ) { change, amount ->
                         change.consume()
-                        if (resizing) {
-                            dragY += amount.y
-                            resizeCallback.value((startFont + (dragY / density) * .32f).coerceIn(12f, 28f))
-                        } else {
-                            dragX += amount.x
-                            dragY += amount.y
-                            moveCallback.value(
-                                (startX + dragX / canvasWidthPx).coerceIn(.08f, .92f),
-                                (startY + dragY / canvasHeightPx).coerceIn(.08f, .92f)
-                            )
-                        }
+                        dragX += amount.x
+                        dragY += amount.y
+                        moveCallback.value(
+                            (startX + dragX / canvasWidthPx).coerceIn(.08f, .92f),
+                            (startY + dragY / canvasHeightPx).coerceIn(.08f, .92f)
+                        )
                     }
                 }
         ) {
             Text(
                 text = displayText,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black.copy(alpha = .78f))
-                    .border(1.dp, Accent.copy(alpha = .78f), RoundedCornerShape(8.dp))
-                    .padding(start = 10.dp, top = 6.dp, end = 24.dp, bottom = 6.dp),
-                color = Color.White,
+                color = Color(AndroidColor.parseColor(textColorHex)),
                 fontSize = fontSp.sp,
                 fontWeight = FontWeight.Medium,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -880,9 +864,6 @@ private fun InteractiveTimedSubtitle(
                 maxLines = 2,
                 softWrap = true
             )
-            Box(Modifier.align(Alignment.BottomEnd).size(22.dp).clip(RoundedCornerShape(topStart = 7.dp, bottomEnd = 7.dp)).background(Accent), contentAlignment = Alignment.Center) {
-                Text("↘", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            }
         }
     }
 }
@@ -927,40 +908,34 @@ private class TimedSubtitleOverlay(
     private val cues: List<SubtitleCue>,
     private val offsetMs: Long,
     fontSizePx: Float,
-    private val paddingStartPx: Float,
-    private val paddingEndPx: Float,
-    private val verticalPaddingPx: Float,
-    private val cornerRadiusPx: Float,
+    textColorHex: String,
     private val horizontalPosition: Float,
     private val verticalPosition: Float
 ) : BitmapOverlay() {
     private val bitmap = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
     private val canvas = Canvas(bitmap)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = AndroidColor.WHITE
+        color = AndroidColor.parseColor(textColorHex)
         textSize = fontSizePx.coerceAtLeast(1f)
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     }
-    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb((.78f * 255).roundToInt(), 0, 0, 0) }
-
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         bitmap.eraseColor(AndroidColor.TRANSPARENT)
         val timeMs = presentationTimeUs.coerceAtLeast(0L) / 1_000L
         val cue = activeSubtitleCue(cues, timeMs, offsetMs) ?: return bitmap
-        val maxTextWidth = (OUTPUT_WIDTH * .78f - paddingStartPx - paddingEndPx).coerceAtLeast(1f)
+        val maxTextWidth = OUTPUT_WIDTH * .78f
         val lines = wrapSubtitleText(cue.text, paint, maxTextWidth).let { wrapped ->
             if (wrapped.size <= 2) wrapped else listOf(wrapped.first(), wrapped.drop(1).joinToString(" "))
         }
         val lineHeight = paint.textSize * 1.18f
-        val boxHeight = lines.size * lineHeight + verticalPaddingPx * 2f
-        val boxWidth = (lines.maxOfOrNull(paint::measureText) ?: 0f).coerceAtMost(maxTextWidth) + paddingStartPx + paddingEndPx
         val centerX = horizontalPosition.coerceIn(.08f, .92f) * OUTPUT_WIDTH
         val centerY = verticalPosition.coerceIn(.1f, .95f) * OUTPUT_HEIGHT
-        val top = centerY - boxHeight / 2f
-        canvas.drawRoundRect(RectF(centerX - boxWidth / 2f, top, centerX + boxWidth / 2f, top + boxHeight), cornerRadiusPx, cornerRadiusPx, background)
-        val textCenterX = centerX + (paddingStartPx - paddingEndPx) / 2f
-        lines.forEachIndexed { index, line -> canvas.drawText(line, textCenterX, top + verticalPaddingPx - paint.ascent() + index * lineHeight, paint) }
+        val textBlockHeight = lines.size * lineHeight
+        val top = centerY - textBlockHeight / 2f
+        val metrics = paint.fontMetrics
+        val firstBaseline = top + (lineHeight - (metrics.descent - metrics.ascent)) / 2f - metrics.ascent
+        lines.forEachIndexed { index, line -> canvas.drawText(line, centerX, firstBaseline + index * lineHeight, paint) }
         return bitmap
     }
 
