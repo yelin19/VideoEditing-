@@ -704,18 +704,28 @@ private fun VideoPreview(
     }
     DisposableEffect(player) { onDispose { player.release() } }
     DisposableEffect(audioPlayer) { onDispose { audioPlayer?.release() } }
-    LaunchedEffect(player, restartToZeroKey) {
-        player.pause()
-        player.seekTo(0L)
-        audioPlayer?.pause()
-        audioPlayer?.seekTo(0L)
-        latestOnPosition.value(0L)
-    }
+    val lastHandledRestartKey = remember(player) { mutableIntStateOf(restartToZeroKey) }
     SideEffect {
         player.volume = if (muteVideoAudio) 0f else videoAudioVolume.coerceIn(0f, 1f)
         audioPlayer?.volume = if (replacementAudioEnabled) replacementAudioVolume.coerceIn(0f, 1f) else 0f
     }
-    LaunchedEffect(player, audioPlayer, replacementAudioEnabled) {
+    LaunchedEffect(player, audioPlayer, replacementAudioEnabled, restartToZeroKey) {
+        if (lastHandledRestartKey.intValue != restartToZeroKey) {
+            lastHandledRestartKey.intValue = restartToZeroKey
+            player.pause()
+            audioPlayer?.pause()
+            for (attempt in 0 until 40) {
+                if (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_ENDED) break
+                delay(50)
+            }
+            player.seekTo(0L)
+            audioPlayer?.seekTo(0L)
+            for (attempt in 0 until 20) {
+                if (player.playbackState == Player.STATE_READY && player.currentPosition <= 100L) break
+                delay(25)
+            }
+            latestOnPosition.value(0L)
+        }
         while (isActive) {
             latestOnPosition.value(player.currentPosition.coerceAtLeast(0L))
             val addedPlayer = audioPlayer
@@ -907,7 +917,7 @@ private class TimedSubtitleOverlay(
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         bitmap.eraseColor(AndroidColor.TRANSPARENT)
-        val timeMs = presentationTimeUs / 1_000L
+        val timeMs = presentationTimeUs.coerceAtLeast(0L) / 1_000L
         val cue = activeSubtitleCue(cues, timeMs, offsetMs) ?: return bitmap
         val lines = wrapSubtitleText(cue.text, paint, OUTPUT_WIDTH * .74f).let { wrapped ->
             if (wrapped.size <= 2) wrapped else listOf(wrapped.first(), wrapped.drop(1).joinToString(" "))
