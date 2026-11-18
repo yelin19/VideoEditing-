@@ -265,7 +265,7 @@ private fun EditorScreen() {
         SectionTitle("SCROLLING CAPTION")
         OutlinedTextField(value = scrollingCaption, onValueChange = { text -> scrollingCaption = text; prefs.edit().putString("scrolling_caption", text).apply() }, modifier = Modifier.fillMaxWidth(),
             label = { Text("Text to scroll across the video") }, placeholder = { Text("Type a message for the scrolling caption") }, singleLine = true)
-        Text("Message is saved on this device and reloads next time. It scrolls across preview and export.", color = Color(0xFF858BA0), fontSize = 11.sp)
+        Text("Auto-saved on this device and automatically included in every preview and export.", color = Color(0xFF858BA0), fontSize = 11.sp)
         Spacer(Modifier.height(10.dp))
         SectionTitle("SUBTITLES · PASTE OR IMPORT TEXT")
         Text("Each line: [start - end] subtitle text. Supports mm:ss and hh:mm:ss, with optional decimal seconds.", color = Color(0xFFA7ACBC), fontSize = 12.sp)
@@ -295,9 +295,10 @@ private fun EditorScreen() {
             Slider(value = subtitleFontSp, onValueChange = { subtitleFontSp = it }, valueRange = 8f..28f, steps = 19)
             Text("Subtitle text color", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                listOf("#FFFFFF", "#FFF176", "#80DEEA", "#FF8A80", "#A5D6A7", "#F48FB1").forEach { hex ->
+                listOf("#FFFFFF", "#000000", "#FFFF00", "#00FFFF", "#FF0000", "#00FF00", "#FF00FF").forEach { hex ->
                     Box(Modifier.size(30.dp).clip(RoundedCornerShape(15.dp)).background(Color(AndroidColor.parseColor(hex)))
-                        .then(if (hex == subtitleColorHex) Modifier.border(3.dp, Accent, RoundedCornerShape(15.dp)) else Modifier)
+                    .border(1.dp, Color.White.copy(alpha = .45f), RoundedCornerShape(15.dp))
+                    .then(if (hex == subtitleColorHex) Modifier.border(3.dp, Accent, RoundedCornerShape(15.dp)) else Modifier)
                         .clickable { subtitleColorHex = hex; prefs.edit().putString("subtitle_color", hex).apply() })
                 }
             }
@@ -345,7 +346,7 @@ private fun EditorScreen() {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(if (savedLogo == null) "No logo selected" else "Custom logo saved", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text("Drag logo on preview · saved on device", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+                Text("Saved on device · automatically added to exports", color = Color(0xFFA7ACBC), fontSize = 11.sp)
             }
             if (savedLogo != null) IconButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }) { Icon(Icons.Default.Close, "Remove Logo", tint = Color(0xFFCF9DA6)) }
         }
@@ -813,10 +814,12 @@ private fun InteractiveTimedSubtitle(
         val canvasWidthPx = with(localDensity) { maxWidth.toPx() }.coerceAtLeast(1f)
         val canvasHeightPx = with(LocalDensity.current) { maxHeight.toPx() }.coerceAtLeast(1f)
         val fontSizePx = with(localDensity) { fontSp.sp.toPx() }
+        val outlineColor = Color(subtitleOutlineColor(textColorHex))
+        val outlineBlurPx = with(localDensity) { 2.dp.toPx() }
         val displayText = remember(text, fontSizePx, canvasWidthPx) {
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 textSize = fontSizePx
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                typeface = Typeface.create("sans-serif", Typeface.BOLD)
             }
             val maxTextWidth = (canvasWidthPx * .78f).coerceAtLeast(1f)
             wrapSubtitleText(text, paint, maxTextWidth).let { lines ->
@@ -858,9 +861,12 @@ private fun InteractiveTimedSubtitle(
                 text = displayText,
                 color = Color(AndroidColor.parseColor(textColorHex)),
                 fontSize = fontSp.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.Bold,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 lineHeight = (fontSp * 1.18f).sp,
+                style = androidx.compose.ui.text.TextStyle(
+                    shadow = androidx.compose.ui.graphics.Shadow(outlineColor, Offset.Zero, outlineBlurPx)
+                ),
                 maxLines = 2,
                 softWrap = true
             )
@@ -904,6 +910,12 @@ private class ScrollingCaptionOverlay(private val text: String) : BitmapOverlay(
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = fullFrameOverlaySettings()
 }
 
+private fun subtitleOutlineColor(textColorHex: String): Int {
+    val color = AndroidColor.parseColor(textColorHex)
+    val brightness = AndroidColor.red(color) * .299f + AndroidColor.green(color) * .587f + AndroidColor.blue(color) * .114f
+    return if (brightness >= 145f) AndroidColor.BLACK else AndroidColor.WHITE
+}
+
 private class TimedSubtitleOverlay(
     private val cues: List<SubtitleCue>,
     private val offsetMs: Long,
@@ -918,7 +930,16 @@ private class TimedSubtitleOverlay(
         color = AndroidColor.parseColor(textColorHex)
         textSize = fontSizePx.coerceAtLeast(1f)
         textAlign = Paint.Align.CENTER
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        typeface = Typeface.create("sans-serif", Typeface.BOLD)
+    }
+    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = subtitleOutlineColor(textColorHex)
+        textSize = fontSizePx.coerceAtLeast(1f)
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif", Typeface.BOLD)
+        style = Paint.Style.STROKE
+        strokeJoin = Paint.Join.ROUND
+        strokeWidth = (textSize * .09f).coerceAtLeast(1f)
     }
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         bitmap.eraseColor(AndroidColor.TRANSPARENT)
@@ -935,7 +956,11 @@ private class TimedSubtitleOverlay(
         val top = centerY - textBlockHeight / 2f
         val metrics = paint.fontMetrics
         val firstBaseline = top + (lineHeight - (metrics.descent - metrics.ascent)) / 2f - metrics.ascent
-        lines.forEachIndexed { index, line -> canvas.drawText(line, centerX, firstBaseline + index * lineHeight, paint) }
+        lines.forEachIndexed { index, line ->
+            val baseline = firstBaseline + index * lineHeight
+            canvas.drawText(line, centerX, baseline, outlinePaint)
+            canvas.drawText(line, centerX, baseline, paint)
+        }
         return bitmap
     }
 
