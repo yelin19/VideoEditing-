@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -133,12 +134,14 @@ private fun EditorScreen() {
     var logoPosition by remember { mutableStateOf(LogoPosition(prefs.getFloat("logo_x", .86f), prefs.getFloat("logo_y", .92f))) }
     var logoScale by remember { mutableFloatStateOf(prefs.getFloat("logo_scale", 1f).coerceIn(.4f, 2.2f)) }
     var borderColorHex by remember { mutableStateOf(prefs.getString("border_color", "#9C7BFF") ?: "#9C7BFF") }
-    var scrollingCaption by remember { mutableStateOf("") }
+    var scrollingCaption by remember { mutableStateOf(prefs.getString("scrolling_caption", "") ?: "") }
     var subtitleCues by remember { mutableStateOf<List<SubtitleCue>>(emptyList()) }
     var subtitleScript by remember { mutableStateOf("") }
     var subtitleOffsetMs by remember { mutableFloatStateOf(0f) }
-    var subtitleFontSp by remember { mutableFloatStateOf(20f) }
+    var subtitleFontSp by remember { mutableFloatStateOf(16f) }
+    var subtitlePositionX by remember { mutableFloatStateOf(.5f) }
     var subtitlePositionY by remember { mutableFloatStateOf(.83f) }
+    var subtitlePreviewRestartKey by remember { mutableIntStateOf(0) }
     var previewPositionMs by remember { mutableLongStateOf(0L) }
     var message by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
@@ -154,7 +157,7 @@ private fun EditorScreen() {
         }.onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG, JPG, or GIF." }
     }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-                if (uri != null) { videoUri = uri; blurRect = BlurRect(); previewPositionMs = 0L }
+        if (uri != null) { videoUri = uri; blurRect = BlurRect(); previewPositionMs = 0L; subtitlePreviewRestartKey++ }
     }
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         audioUri = uri
@@ -166,7 +169,7 @@ private fun EditorScreen() {
                 ?: error("Subtitle file could not be opened")
         }.onSuccess { text ->
             runCatching { parseSubtitleScript(text) }
-                .onSuccess { cues -> subtitleScript = text; subtitleCues = cues; message = "Loaded ${cues.size} subtitle lines. Adjust the text, timing, size or position below." }
+                .onSuccess { cues -> subtitleScript = text; subtitleCues = cues; previewPositionMs = 0L; subtitlePreviewRestartKey++; message = "Loaded ${cues.size} subtitle lines. Adjust the text, timing, size or position below." }
                 .onFailure { message = it.message ?: "Could not read this subtitle file." }
         }.onFailure { message = it.message ?: "Could not open this subtitle file." }
     }
@@ -195,7 +198,7 @@ private fun EditorScreen() {
             val previewWidth = minOf(maxWidth, maxHeight * 9f / 16f)
             val previewHeight = previewWidth * 16f / 9f
             Box(Modifier.width(previewWidth).aspectRatio(9f / 16f).align(Alignment.Center).clip(RoundedCornerShape(18.dp)).background(Color(0xFF08090D))) {
-                if (videoUri != null) VideoPreview(videoUri!!, audioUri, mirror, zoom, muteOriginal, videoAudioVolume, replacementAudioEnabled, replacementAudioVolume, Modifier.fillMaxSize(), onPosition = { previewPositionMs = it })
+                if (videoUri != null) VideoPreview(videoUri!!, audioUri, mirror, zoom, muteOriginal, videoAudioVolume, replacementAudioEnabled, replacementAudioVolume, subtitlePreviewRestartKey, Modifier.fillMaxSize(), onPosition = { previewPositionMs = it })
                 if (videoUri == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.Movie, null, tint = Color(0xFF73798C), modifier = Modifier.size(36.dp))
                     Spacer(Modifier.height(8.dp)); Text("Your 9:16 video preview", color = Color(0xFFA7ACBC), fontSize = 12.sp)
@@ -225,7 +228,9 @@ private fun EditorScreen() {
                 if (warmEnabled && videoUri != null) Text("WARM ${ (warmAmount * 100).roundToInt()}%", Modifier.align(Alignment.TopStart).padding(7.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .55f)).padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, fontSize = 8.sp)
                 if (scrollingCaption.isNotBlank() && videoUri != null) ScrollingCaptionPreview(scrollingCaption, Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(34.dp))
                 activeSubtitleCue(subtitleCues, previewPositionMs, subtitleOffsetMs.toLong())?.let { cue ->
-                    TimedSubtitlePreview(cue.text, subtitleFontSp, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = previewHeight * (1f - subtitlePositionY)))
+                    InteractiveTimedSubtitle(cue.text, subtitleFontSp, subtitlePositionX, subtitlePositionY, Modifier.fillMaxSize(),
+                        onMove = { x, y -> subtitlePositionX = x; subtitlePositionY = y },
+                        onResize = { subtitleFontSp = it })
                 }
                 Box(Modifier.fillMaxSize().border(3.dp, Color(AndroidColor.parseColor(borderColorHex)), RoundedCornerShape(18.dp)))
             }
@@ -255,9 +260,9 @@ private fun EditorScreen() {
             }
         }
         SectionTitle("SCROLLING CAPTION")
-        OutlinedTextField(value = scrollingCaption, onValueChange = { scrollingCaption = it }, modifier = Modifier.fillMaxWidth(),
+        OutlinedTextField(value = scrollingCaption, onValueChange = { text -> scrollingCaption = text; prefs.edit().putString("scrolling_caption", text).apply() }, modifier = Modifier.fillMaxWidth(),
             label = { Text("Text to scroll across the video") }, placeholder = { Text("Type a message for the scrolling caption") }, singleLine = true)
-        Text("The caption scrolls across the bottom in preview and export.", color = Color(0xFF858BA0), fontSize = 11.sp)
+        Text("Message is saved on this device and reloads next time. It scrolls across preview and export.", color = Color(0xFF858BA0), fontSize = 11.sp)
         Spacer(Modifier.height(10.dp))
         SectionTitle("SUBTITLES · PASTE OR IMPORT TEXT")
         Text("Each line: [start - end] subtitle text. Supports mm:ss and hh:mm:ss, with optional decimal seconds.", color = Color(0xFFA7ACBC), fontSize = 12.sp)
@@ -273,19 +278,22 @@ private fun EditorScreen() {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 runCatching { parseSubtitleScript(subtitleScript) }
-                    .onSuccess { cues -> subtitleCues = cues; previewPositionMs = 0L; message = "Loaded ${cues.size} subtitle lines. Adjust timing, size or position below." }
+                    .onSuccess { cues -> subtitleCues = cues; previewPositionMs = 0L; subtitlePreviewRestartKey++; message = "Loaded ${cues.size} subtitle lines. Adjust timing, size or position below." }
                     .onFailure { message = it.message ?: "Check the subtitle line format and timing." }
             }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(13.dp)) { Text("Apply subtitles") }
             OutlinedButton(onClick = { subtitlePicker.launch(arrayOf("text/plain", "application/x-subrip", "text/srt", "*/*")) }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(13.dp)) { Text("Import .txt / .srt") }
         }
         if (subtitleCues.isNotEmpty()) {
             Text("${subtitleCues.size} subtitle lines loaded · edit the text above, then Apply again", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+            Text("Touch and drag the subtitle on the preview to move it; drag its ↘ corner to resize.", color = Accent, fontSize = 11.sp)
             Text("Timing delay · ${"%+.1f".format(subtitleOffsetMs / 1000f)} sec", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Slider(value = subtitleOffsetMs, onValueChange = { subtitleOffsetMs = it }, valueRange = -5000f..5000f, steps = 39)
-            Text("Text size · ${subtitleFontSp.roundToInt()} sp", color = Color(0xFFBEC2D0), fontSize = 12.sp)
-            Slider(value = subtitleFontSp, onValueChange = { subtitleFontSp = it }, valueRange = 14f..36f, steps = 10)
-            Text("Subtitle vertical position · ${(subtitlePositionY * 100).roundToInt()}% from top", color = Color(0xFFBEC2D0), fontSize = 12.sp)
-            Slider(value = subtitlePositionY, onValueChange = { subtitlePositionY = it }, valueRange = .55f.. .94f, steps = 38)
+            Text("Subtitle size · ${subtitleFontSp.roundToInt()} sp", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = subtitleFontSp, onValueChange = { subtitleFontSp = it }, valueRange = 12f..28f, steps = 15)
+            Text("Horizontal position · ${(subtitlePositionX * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = subtitlePositionX, onValueChange = { subtitlePositionX = it }, valueRange = .08f.. .92f, steps = 41)
+            Text("Vertical position · ${(subtitlePositionY * 100).roundToInt()}% from top", color = Color(0xFFBEC2D0), fontSize = 12.sp)
+            Slider(value = subtitlePositionY, onValueChange = { subtitlePositionY = it }, valueRange = .08f.. .92f, steps = 41)
             TextButton(onClick = { subtitleScript = ""; subtitleCues = emptyList(); subtitleOffsetMs = 0f }) { Text("Remove subtitles") }
         }
         Spacer(Modifier.height(10.dp))
@@ -363,7 +371,7 @@ private fun EditorScreen() {
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
                         savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
-                        if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(subtitleCues, subtitleOffsetMs.toLong(), subtitleFontSp * 2f, subtitlePositionY))))
+                        if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(subtitleCues, subtitleOffsetMs.toLong(), subtitleFontSp * 2f, subtitlePositionX, subtitlePositionY))))
                         add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBorderOverlay(borderColorHex), fullFrameOverlaySettings()))))
                     }
                     val videoEdited = EditedMediaItem.Builder(MediaItem.fromUri(source))
@@ -669,6 +677,7 @@ private fun VideoPreview(
     videoAudioVolume: Float,
     replacementAudioEnabled: Boolean,
     replacementAudioVolume: Float,
+    restartToZeroKey: Int,
     modifier: Modifier = Modifier,
     onPosition: (Long) -> Unit
 ) {
@@ -695,6 +704,13 @@ private fun VideoPreview(
     }
     DisposableEffect(player) { onDispose { player.release() } }
     DisposableEffect(audioPlayer) { onDispose { audioPlayer?.release() } }
+    LaunchedEffect(player, restartToZeroKey) {
+        player.pause()
+        player.seekTo(0L)
+        audioPlayer?.pause()
+        audioPlayer?.seekTo(0L)
+        latestOnPosition.value(0L)
+    }
     SideEffect {
         player.volume = if (muteVideoAudio) 0f else videoAudioVolume.coerceIn(0f, 1f)
         audioPlayer?.volume = if (replacementAudioEnabled) replacementAudioVolume.coerceIn(0f, 1f) else 0f
@@ -758,9 +774,81 @@ private fun ScrollingCaptionPreview(text: String, modifier: Modifier = Modifier)
 }
 
 @Composable
-private fun TimedSubtitlePreview(text: String, fontSp: Float, modifier: Modifier = Modifier) {
-    Text(text, modifier.clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = .82f)).padding(horizontal = 12.dp, vertical = 7.dp),
-        color = Color.White, fontSize = fontSp.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+private fun InteractiveTimedSubtitle(
+    text: String,
+    fontSp: Float,
+    positionX: Float,
+    positionY: Float,
+    modifier: Modifier = Modifier,
+    onMove: (Float, Float) -> Unit,
+    onResize: (Float) -> Unit
+) {
+    BoxWithConstraints(modifier) {
+        val density = LocalDensity.current.density
+        val canvasWidthPx = with(LocalDensity.current) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val canvasHeightPx = with(LocalDensity.current) { maxHeight.toPx() }.coerceAtLeast(1f)
+        val resizeGripPx = with(LocalDensity.current) { 30.dp.toPx() }
+        val currentX = rememberUpdatedState(positionX)
+        val currentY = rememberUpdatedState(positionY)
+        val currentFont = rememberUpdatedState(fontSp)
+        val moveCallback = rememberUpdatedState(onMove)
+        val resizeCallback = rememberUpdatedState(onResize)
+
+        Box(
+            Modifier.align(Alignment.Center)
+                .offset(x = maxWidth * (positionX - .5f), y = maxHeight * (positionY - .5f))
+                .widthIn(max = maxWidth * .78f)
+                .pointerInput(canvasWidthPx, canvasHeightPx, resizeGripPx) {
+                    var resizing = false
+                    var dragX = 0f
+                    var dragY = 0f
+                    var startX = positionX
+                    var startY = positionY
+                    var startFont = fontSp
+                    detectDragGestures(
+                        onDragStart = { point ->
+                            resizing = point.x >= size.width - resizeGripPx && point.y >= size.height - resizeGripPx
+                            dragX = 0f
+                            dragY = 0f
+                            startX = currentX.value
+                            startY = currentY.value
+                            startFont = currentFont.value
+                        }
+                    ) { change, amount ->
+                        change.consume()
+                        if (resizing) {
+                            dragY += amount.y
+                            resizeCallback.value((startFont + (dragY / density) * .32f).coerceIn(12f, 28f))
+                        } else {
+                            dragX += amount.x
+                            dragY += amount.y
+                            moveCallback.value(
+                                (startX + dragX / canvasWidthPx).coerceIn(.08f, .92f),
+                                (startY + dragY / canvasHeightPx).coerceIn(.08f, .92f)
+                            )
+                        }
+                    }
+                }
+        ) {
+            Text(
+                text = text,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = .78f))
+                    .border(1.dp, Accent.copy(alpha = .78f), RoundedCornerShape(8.dp))
+                    .padding(start = 10.dp, top = 6.dp, end = 24.dp, bottom = 6.dp),
+                color = Color.White,
+                fontSize = fontSp.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                lineHeight = (fontSp * 1.18f).sp,
+                maxLines = 2,
+                softWrap = true
+            )
+            Box(Modifier.align(Alignment.BottomEnd).size(22.dp).clip(RoundedCornerShape(topStart = 7.dp, bottomEnd = 7.dp)).background(Accent), contentAlignment = Alignment.Center) {
+                Text("↘", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 private fun makeBorderOverlay(colorHex: String): Bitmap {
@@ -803,6 +891,7 @@ private class TimedSubtitleOverlay(
     private val cues: List<SubtitleCue>,
     private val offsetMs: Long,
     fontSizePx: Float,
+    private val horizontalPosition: Float,
     private val verticalPosition: Float
 ) : BitmapOverlay() {
     private val bitmap = Bitmap.createBitmap(OUTPUT_WIDTH, OUTPUT_HEIGHT, Bitmap.Config.ARGB_8888)
@@ -820,13 +909,17 @@ private class TimedSubtitleOverlay(
         bitmap.eraseColor(AndroidColor.TRANSPARENT)
         val timeMs = presentationTimeUs / 1_000L
         val cue = activeSubtitleCue(cues, timeMs, offsetMs) ?: return bitmap
-        val lines = wrapSubtitleText(cue.text, paint, OUTPUT_WIDTH - 72f).take(2)
-        val lineHeight = paint.textSize * 1.25f
-        val boxHeight = lines.size * lineHeight + 28f
+        val lines = wrapSubtitleText(cue.text, paint, OUTPUT_WIDTH * .74f).let { wrapped ->
+            if (wrapped.size <= 2) wrapped else listOf(wrapped.first(), wrapped.drop(1).joinToString(" "))
+        }
+        val lineHeight = paint.textSize * 1.2f
+        val boxHeight = lines.size * lineHeight + 20f
+        val boxWidth = (lines.maxOfOrNull(paint::measureText) ?: 0f).coerceAtMost(OUTPUT_WIDTH - 24f) + 28f
+        val centerX = (horizontalPosition.coerceIn(.08f, .92f) * OUTPUT_WIDTH).coerceIn(boxWidth / 2f + 12f, OUTPUT_WIDTH - boxWidth / 2f - 12f)
         val centerY = verticalPosition.coerceIn(.1f, .95f) * OUTPUT_HEIGHT
         val top = (centerY - boxHeight / 2f).coerceIn(12f, OUTPUT_HEIGHT - boxHeight - 12f)
-        canvas.drawRoundRect(RectF(24f, top, OUTPUT_WIDTH - 24f, top + boxHeight), 18f, 18f, background)
-        lines.forEachIndexed { index, line -> canvas.drawText(line, OUTPUT_WIDTH / 2f, top + 38f + index * lineHeight, paint) }
+        canvas.drawRoundRect(RectF(centerX - boxWidth / 2f, top, centerX + boxWidth / 2f, top + boxHeight), 14f, 14f, background)
+        lines.forEachIndexed { index, line -> canvas.drawText(line, centerX, top + paint.textSize + 7f + index * lineHeight, paint) }
         return bitmap
     }
 
