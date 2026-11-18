@@ -262,10 +262,14 @@ private fun EditorScreen() {
                     .clickable { borderColorHex = hex; prefs.edit().putString("border_color", hex).apply() })
             }
         }
-        SectionTitle("SCROLLING CAPTION")
-        OutlinedTextField(value = scrollingCaption, onValueChange = { text -> scrollingCaption = text; prefs.edit().putString("scrolling_caption", text).apply() }, modifier = Modifier.fillMaxWidth(),
-            label = { Text("Text to scroll across the video") }, placeholder = { Text("Type a message for the scrolling caption") }, singleLine = true)
-        Text("Auto-saved on this device and automatically included in every preview and export.", color = Color(0xFF858BA0), fontSize = 11.sp)
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Panel).padding(13.dp)) {
+            SectionTitle("SAVED SCROLLING TEXT")
+            OutlinedTextField(value = scrollingCaption, onValueChange = { text -> scrollingCaption = text; prefs.edit().putString("scrolling_caption", text).apply() }, modifier = Modifier.fillMaxWidth(),
+                label = { Text("Text to scroll across the video") }, placeholder = { Text("Type a message for the scrolling caption") }, singleLine = true)
+            Spacer(Modifier.height(5.dp))
+            Text("Saved separately on this device · automatically used in previews and every export.", color = Color(0xFF858BA0), fontSize = 11.sp)
+            if (scrollingCaption.isNotBlank()) TextButton(onClick = { scrollingCaption = ""; prefs.edit().putString("scrolling_caption", "").apply() }, modifier = Modifier.align(Alignment.End)) { Text("Clear saved text", color = Color(0xFFCF9DA6)) }
+        }
         Spacer(Modifier.height(10.dp))
         SectionTitle("SUBTITLES · PASTE OR IMPORT TEXT")
         Text("Each line: [start - end] subtitle text. Supports mm:ss and hh:mm:ss, with optional decimal seconds.", color = Color(0xFFA7ACBC), fontSize = 12.sp)
@@ -336,8 +340,9 @@ private fun EditorScreen() {
         }
 
         Spacer(Modifier.height(14.dp))
-        SectionTitle("YOUR WATERMARK")
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Panel).padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Panel).padding(13.dp)) {
+        SectionTitle("SAVED LOGO WATERMARK")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(54.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF292E3B)), contentAlignment = Alignment.Center) {
                 val bmp = remember(savedLogo?.absolutePath) { savedLogo?.let { decodeLogoPreview(it)?.asImageBitmap() } }
                 if (bmp != null) androidx.compose.foundation.Image(bmp, null, Modifier.fillMaxSize().padding(5.dp), contentScale = ContentScale.Fit)
@@ -346,7 +351,7 @@ private fun EditorScreen() {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(if (savedLogo == null) "No logo selected" else "Custom logo saved", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text("Saved on device · automatically added to exports", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+                Text("Stored separately on this device · automatically added to previews and exports", color = Color(0xFFA7ACBC), fontSize = 11.sp)
             }
             if (savedLogo != null) IconButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }) { Icon(Icons.Default.Close, "Remove Logo", tint = Color(0xFFCF9DA6)) }
         }
@@ -365,6 +370,7 @@ private fun EditorScreen() {
             Slider(value = logoScale, onValueChange = { logoScale = it; prefs.edit().putFloat("logo_scale", it).apply() }, valueRange = .4f..2.2f)
         }
         if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Remove Logo", color = Color(0xFFCF9DA6)) }
+        }
 
         Spacer(Modifier.height(16.dp))
         Button(
