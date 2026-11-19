@@ -90,6 +90,7 @@ import java.nio.ByteBuffer
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -116,7 +117,15 @@ private fun EditorScreen() {
     val context = LocalContext.current
     val density = LocalDensity.current
     val prefs = remember { context.getSharedPreferences("video_editing", Context.MODE_PRIVATE) }
-    var savedLogo by remember { mutableStateOf(readValidLogo(prefs)) }
+    val logoPrefsInitialized = remember(prefs) {
+        if (!prefs.getBoolean("china_ai_default_logo_v1", false)) {
+            prefs.edit().remove("custom_logo_path").putBoolean("china_ai_default_logo_v1", true).apply()
+        }
+        true
+    }
+    var savedLogo by remember(logoPrefsInitialized) { mutableStateOf(readValidLogo(prefs)) }
+    val bundledLogo = remember(context) { runCatching { copyBundledLogo(context) }.getOrNull() }
+    val activeLogo = savedLogo ?: bundledLogo
     var videoUri by remember { mutableStateOf<Uri?>(null) }
     var audioUri by remember { mutableStateOf<Uri?>(null) }
     var mirror by remember { mutableStateOf(false) }
@@ -210,7 +219,7 @@ private fun EditorScreen() {
                 }
                 if (warmEnabled && videoUri != null) Box(Modifier.fillMaxSize().background(Color(0xFFFF9F4C).copy(alpha = warmAmount * .48f)))
                 if (blurEnabled && videoUri != null) InteractiveBlurBox(blurRect, blurStrength, Modifier.fillMaxSize(), onChange = { blurRect = it })
-                savedLogo?.let { file ->
+                activeLogo?.let { file ->
                     val isGif = file.extension.equals("gif", ignoreCase = true)
                     val bitmap = remember(file.absolutePath) { if (isGif) null else decodeLogoPreview(file)?.asImageBitmap() }
                     val animatedDrawable = remember(file.absolutePath) {
@@ -345,28 +354,28 @@ private fun EditorScreen() {
         SectionTitle("SAVED LOGO WATERMARK")
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(54.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF292E3B)), contentAlignment = Alignment.Center) {
-                val bmp = remember(savedLogo?.absolutePath) { savedLogo?.let { decodeLogoPreview(it)?.asImageBitmap() } }
+                val bmp = remember(activeLogo?.absolutePath) { activeLogo?.let { decodeLogoPreview(it)?.asImageBitmap() } }
                 if (bmp != null) androidx.compose.foundation.Image(bmp, null, Modifier.fillMaxSize().padding(5.dp), contentScale = ContentScale.Fit)
                 else Icon(Icons.Default.AddPhotoAlternate, null, tint = Color(0xFF858BA0))
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(if (savedLogo == null) "No logo selected" else "Custom logo saved", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text("Stored separately on this device · automatically added to previews and exports", color = Color(0xFFA7ACBC), fontSize = 11.sp)
+                Text(if (savedLogo == null) "Built-in China AI logo" else "Custom logo saved", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(if (savedLogo == null) "Included in the APK · drag and resize in preview" else "Saved on this device · automatically used in previews and exports", color = Color(0xFFA7ACBC), fontSize = 11.sp)
             }
-            if (savedLogo != null) IconButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = null }) { Icon(Icons.Default.Close, "Remove Logo", tint = Color(0xFFCF9DA6)) }
+            if (savedLogo != null) IconButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }) { Icon(Icons.Default.Close, "Use built-in logo", tint = Color(0xFFCF9DA6)) }
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(14.dp)) {
-            Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(7.dp)); Text(if (savedLogo == null) "Choose Logo" else "Change Logo")
+            Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(7.dp)); Text(if (savedLogo == null) "Choose another logo" else "Change Logo")
         }
         Text("PNG/JPG are still images. GIF logos animate and loop. Drag the logo in the preview to move; pinch with two fingers to resize.", color = Color(0xFF858BA0), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
-        if (savedLogo != null) TextButton(onClick = {
+        if (activeLogo != null) TextButton(onClick = {
             logoPosition = LogoPosition()
             logoScale = 1f
             prefs.edit().putFloat("logo_x", logoPosition.x).putFloat("logo_y", logoPosition.y).putFloat("logo_scale", 1f).apply()
         }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Reset logo position") }
-        if (savedLogo != null) {
+        if (activeLogo != null) {
             Text("Logo size · ${(logoScale * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
             Slider(value = logoScale, onValueChange = { logoScale = it; prefs.edit().putFloat("logo_scale", it).apply() }, valueRange = .4f..2.2f)
             Text("Logo left / right · ${(logoPosition.x * 100).roundToInt()}%", color = Color(0xFFBEC2D0), fontSize = 12.sp)
@@ -380,7 +389,7 @@ private fun EditorScreen() {
                 }
             }
         }
-        if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").remove("logo_crop_x").remove("logo_crop_y").remove("logo_crop_w").remove("logo_crop_h").apply(); savedLogo = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Remove Logo", color = Color(0xFFCF9DA6)) }
+        if (savedLogo != null) TextButton(onClick = { savedLogo?.delete(); prefs.edit().remove("custom_logo_path").apply(); savedLogo = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Use built-in logo", color = Color(0xFFCF9DA6)) }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -400,7 +409,7 @@ private fun EditorScreen() {
                         add(Presentation.createForWidthAndHeight(OUTPUT_WIDTH, OUTPUT_HEIGHT, Presentation.LAYOUT_SCALE_TO_FIT))
                         if (warmEnabled && warmAmount > 0f) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeWarmOverlay(warmAmount), fullFrameOverlaySettings()))))
                         if (blurEnabled) add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(makeBlurCoverOverlay(blurRect, blurStrength), fullFrameOverlaySettings()))))
-                        savedLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
+                        activeLogo?.takeIf { it.isFile }?.let { add(OverlayEffect(listOf(createLogoOverlay(it, logoPosition, logoScale)))) }
                         if (scrollingCaption.isNotBlank()) add(OverlayEffect(listOf(ScrollingCaptionOverlay(scrollingCaption))))
                         if (subtitleCues.isNotEmpty()) add(OverlayEffect(listOf(TimedSubtitleOverlay(
                             subtitleCues, subtitleOffsetMs.toLong(), subtitleRenderFontPx, subtitleColorHex, subtitlePositionX, subtitlePositionY
@@ -688,7 +697,12 @@ private fun fullFrameOverlaySettings(): OverlaySettings = OverlaySettings.Builde
 private fun ScrollingCaptionPreview(text: String, modifier: Modifier = Modifier) {
     Text(
         text = "   $text   •   $text   •   ",
-        modifier = modifier.background(Color.Black.copy(alpha = .68f)).basicMarquee(iterations = Int.MAX_VALUE).padding(horizontal = 8.dp, vertical = 5.dp),
+        modifier = modifier.background(Color.Black.copy(alpha = .68f)).basicMarquee(
+            iterations = Int.MAX_VALUE,
+            initialDelayMillis = 0,
+            repeatDelayMillis = 0,
+            velocity = 30.dp
+        ).padding(horizontal = 8.dp, vertical = 5.dp),
         color = Color.White,
         fontSize = 13.sp,
         fontWeight = FontWeight.SemiBold,
@@ -791,13 +805,13 @@ private class ScrollingCaptionOverlay(private val text: String) : BitmapOverlay(
         textSize = 42f
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     }
-    private val durationUs = 8_000_000L
+    private val message = "   $text   •   "
+    private val durationUs = (((OUTPUT_WIDTH + textPaint.measureText(message)) / 90f) * 1_000_000L).roundToLong().coerceAtLeast(1L)
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         bitmap.eraseColor(AndroidColor.TRANSPARENT)
         val bandTop = OUTPUT_HEIGHT - 86f
         canvas.drawRect(0f, bandTop, OUTPUT_WIDTH.toFloat(), OUTPUT_HEIGHT.toFloat(), backgroundPaint)
-        val message = "   $text   •   "
         val textWidth = textPaint.measureText(message)
         val phase = (presentationTimeUs.coerceAtLeast(0L) % durationUs).toFloat() / durationUs
         canvas.drawText(message, OUTPUT_WIDTH - phase * (OUTPUT_WIDTH + textWidth), OUTPUT_HEIGHT - 29f, textPaint)
@@ -1027,6 +1041,17 @@ private fun saveToGallery(context: Context, source: File): Uri {
 private fun readValidLogo(prefs: android.content.SharedPreferences): File? {
     val path = prefs.getString("custom_logo_path", null) ?: return null
     return File(path).takeIf { it.isFile && it.length() > 0 }
+}
+
+private fun copyBundledLogo(context: Context): File {
+    val target = File(context.filesDir, "bundled-china-ai-logo.png")
+    if (!target.isFile || target.length() == 0L) {
+        context.resources.openRawResource(R.raw.bundled_china_ai_logo).use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+    }
+    check(target.isFile && target.length() > 0L) { "The built-in logo could not be loaded" }
+    return target
 }
 
 private fun decodeLogoPreview(file: File): Bitmap? {
