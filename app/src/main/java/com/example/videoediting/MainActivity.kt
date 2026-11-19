@@ -286,15 +286,15 @@ private fun EditorScreen() {
         Spacer(Modifier.height(6.dp))
         Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) {
         SectionTitle("VIDEO")
-        SectionTitle("EDIT PRESETS · ХАДГАЛСАН ТОХИРГОО")
+        SectionTitle("သိမ်းထားသော တည်းဖြတ်မှုအပြင်အဆင်များ")
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(Modifier.weight(1f)) {
                 OutlinedButton(onClick = { presetMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(selectedPresetName ?: "Select saved preset", maxLines = 1)
+                    Text(selectedPresetName ?: "သိမ်းထားသောအမည်ကို ရွေးပါ", maxLines = 1)
                 }
                 DropdownMenu(expanded = presetMenuExpanded, onDismissRequest = { presetMenuExpanded = false }) {
                     if (editingPresets.isEmpty()) {
-                        DropdownMenuItem(text = { Text("No saved settings yet") }, onClick = { presetMenuExpanded = false }, enabled = false)
+                        DropdownMenuItem(text = { Text("သိမ်းထားသောအပြင်အဆင် မရှိသေးပါ") }, onClick = { presetMenuExpanded = false }, enabled = false)
                     }
                     editingPresets.forEach { (name, preset) ->
                         DropdownMenuItem(text = { Text(name, maxLines = 1) }, onClick = {
@@ -326,7 +326,7 @@ private fun EditorScreen() {
                                 .putString("border_color", borderColorHex).putString("scrolling_caption", scrollingCaption).putString("subtitle_color", subtitleColorHex).apply()
                             previewPositionMs = 0L
                             subtitlePreviewRestartKey++
-                            message = "Loaded settings: $name"
+                            message = "‘$name’ အပြင်အဆင်ကို ပြန်သုံးထားပါတယ်။"
                         })
                     }
                 }
@@ -335,17 +335,18 @@ private fun EditorScreen() {
                 IconButton(onClick = {
                     val updated = LinkedHashMap(editingPresets)
                     updated.remove(selectedPresetName)
-                    editingPresets = updated
-                    saveEditingPresets(prefs, updated)
-                    selectedPresetName = null
-                }) { Icon(Icons.Default.Close, "Delete selected preset", tint = Color(0xFFCF9DA6)) }
+                    if (saveEditingPresets(prefs, updated)) {
+                        editingPresets = updated
+                        selectedPresetName = null
+                    } else message = "ဒီအပြင်အဆင်ကို ဖျက်၍မရပါ။ ထပ်ကြိုးစားပါ။"
+                }) { Icon(Icons.Default.Close, "ရွေးထားသောအပြင်အဆင်ကို ဖျက်ရန်", tint = Color(0xFFCF9DA6)) }
             }
             OutlinedButton(onClick = { presetNameInput = ""; showSavePresetDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = null)
-                Text(" Add")
+                Text(" ထည့်ရန်")
             }
         }
-        Text("Profiles save edit settings, scrolling text and subtitles; selected video/audio files are not included.", color = Color(0xFF858BA0), fontSize = 11.sp)
+        Text("ဖုန်းထဲမှာ သိမ်းထားပြီး app ပိတ်ဖွင့်ပြီးနောက်လည်း ရှိနေပါမယ်။ Uninstall သို့မဟုတ် Clear data လုပ်ပါက ပျောက်သွားပါမယ်။ Video/Audio ဖိုင်တွေ မပါဝင်ပါ။", color = Color(0xFF858BA0), fontSize = 11.sp)
         SettingSwitch("Mirror horizontally", "Flip the frame left-to-right", mirror) { mirror = it }
         Text("Slight zoom · ${"%.2f".format(zoom)}×", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
         Slider(value = zoom, onValueChange = { zoom = it }, valueRange = 1f..1.18f)
@@ -552,15 +553,15 @@ private fun EditorScreen() {
         Spacer(Modifier.height(24.dp))
         }
     }
-    message?.let { text -> AlertDialog(onDismissRequest = { message = null }, confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } }, title = { Text(if (text.startsWith("Video exported")) "Export complete" else "Notice") }, text = { Text(text) } ) }
+    message?.let { text -> AlertDialog(onDismissRequest = { message = null }, confirmButton = { TextButton(onClick = { message = null }) { Text("အိုကေ") } }, title = { Text(if (text.startsWith("Video exported")) "Export complete" else "အသိပေးချက်") }, text = { Text(text) } ) }
     if (showSavePresetDialog) AlertDialog(
         onDismissRequest = { showSavePresetDialog = false },
-        title = { Text("Save editing settings") },
+        title = { Text("တည်းဖြတ်မှုအပြင်အဆင်ကို သိမ်းရန်") },
         text = {
             Column {
-                Text("Enter a name. Saving an existing name replaces its previous settings.", color = Color(0xFFA7ACBC))
+                Text("အမည်ထည့်ပါ။ ရှိပြီးသားအမည်ကို ထပ်သိမ်းပါက အရင်အပြင်အဆင်ကို အစားထိုးပါမယ်။", color = Color(0xFFA7ACBC))
                 Spacer(Modifier.height(10.dp))
-                OutlinedTextField(value = presetNameInput, onValueChange = { presetNameInput = it }, singleLine = true, label = { Text("Preset name") }, placeholder = { Text("e.g. Warm portrait") })
+                OutlinedTextField(value = presetNameInput, onValueChange = { presetNameInput = it }, singleLine = true, label = { Text("အမည်") }, placeholder = { Text("ဥပမာ - အနွေးရောင်") })
             }
         },
         confirmButton = {
@@ -568,7 +569,7 @@ private fun EditorScreen() {
                 val name = presetNameInput.trim()
                 if (name.isBlank()) {
                     showSavePresetDialog = false
-                    message = "Enter a name for these settings first."
+                    message = "သိမ်းရန်အမည်တစ်ခု ထည့်ပါ။"
                 } else {
                     val preset = EditorPreset(
                         mirror, zoom, warmEnabled, warmAmount, borderColorHex, muteOriginal, videoAudioVolume,
@@ -578,15 +579,16 @@ private fun EditorScreen() {
                     )
                     val updated = LinkedHashMap(editingPresets)
                     updated[name] = preset
-                    editingPresets = updated
-                    saveEditingPresets(prefs, updated)
-                    selectedPresetName = name
                     showSavePresetDialog = false
-                    message = "Saved ‘$name’. Select it next time to restore these settings."
+                    if (saveEditingPresets(prefs, updated)) {
+                        editingPresets = updated
+                        selectedPresetName = name
+                        message = "‘$name’ ကို သိမ်းပြီးပါပြီ။ နောက်တစ်ခါ အမည်ကို ရွေးပြီး အပြင်အဆင်ကို ပြန်သုံးနိုင်ပါတယ်။"
+                    } else message = "အပြင်အဆင်ကို ဖုန်းထဲသို့ သိမ်း၍မရပါ။ ထပ်ကြိုးစားပါ။"
                 }
-            }) { Text("Save") }
+            }) { Text("သိမ်းမည်") }
         },
-        dismissButton = { TextButton(onClick = { showSavePresetDialog = false }) { Text("Cancel") } }
+        dismissButton = { TextButton(onClick = { showSavePresetDialog = false }) { Text("မလုပ်တော့ပါ") } }
     )
 }
 
@@ -1195,12 +1197,12 @@ private fun loadEditingPresets(prefs: android.content.SharedPreferences): Linked
     return saved
 }
 
-private fun saveEditingPresets(prefs: android.content.SharedPreferences, presets: Map<String, EditorPreset>) {
+private fun saveEditingPresets(prefs: android.content.SharedPreferences, presets: Map<String, EditorPreset>): Boolean {
     val array = JSONArray()
     presets.forEach { (name, preset) ->
         array.put(JSONObject().put("name", name).put("settings", editorPresetToJson(preset)))
     }
-    prefs.edit().putString("editing_presets", array.toString()).apply()
+    return prefs.edit().putString("editing_presets", array.toString()).commit()
 }
 
 private fun editorPresetToJson(preset: EditorPreset): JSONObject = JSONObject()
