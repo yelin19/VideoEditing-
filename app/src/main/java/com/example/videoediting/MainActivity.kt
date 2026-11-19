@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -93,6 +94,8 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Background = Color(0xFF10131B)
 private val Panel = Color(0xFF1A1E29)
@@ -104,6 +107,29 @@ private const val OUTPUT_AUDIO_BITRATE = 96_000
 private data class BlurRect(val x: Float = .22f, val y: Float = .70f, val w: Float = .56f, val h: Float = .11f)
 private data class LogoPosition(val x: Float = .86f, val y: Float = .92f)
 private data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
+private data class EditorPreset(
+    val mirror: Boolean,
+    val zoom: Float,
+    val warmEnabled: Boolean,
+    val warmAmount: Float,
+    val borderColorHex: String,
+    val muteOriginal: Boolean,
+    val videoAudioVolume: Float,
+    val replacementAudioEnabled: Boolean,
+    val replacementAudioVolume: Float,
+    val blurEnabled: Boolean,
+    val blurRect: BlurRect,
+    val blurStrength: Float,
+    val logoPosition: LogoPosition,
+    val logoScale: Float,
+    val scrollingCaption: String,
+    val subtitleScript: String,
+    val subtitleOffsetMs: Float,
+    val subtitleFontSp: Float,
+    val subtitleColorHex: String,
+    val subtitlePositionX: Float,
+    val subtitlePositionY: Float
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -126,6 +152,11 @@ private fun EditorScreen() {
     var savedLogo by remember(logoPrefsInitialized) { mutableStateOf(readValidLogo(prefs)) }
     val bundledLogo = remember(context) { runCatching { copyBundledLogo(context) }.getOrNull() }
     val activeLogo = savedLogo ?: bundledLogo
+    var editingPresets by remember { mutableStateOf(loadEditingPresets(prefs)) }
+    var selectedPresetName by remember { mutableStateOf<String?>(null) }
+    var presetMenuExpanded by remember { mutableStateOf(false) }
+    var showSavePresetDialog by remember { mutableStateOf(false) }
+    var presetNameInput by remember { mutableStateOf("") }
     var videoUri by remember { mutableStateOf<Uri?>(null) }
     var audioUri by remember { mutableStateOf<Uri?>(null) }
     var mirror by remember { mutableStateOf(false) }
@@ -171,7 +202,7 @@ private fun EditorScreen() {
             .onFailure { message = it.message ?: "Couldn't save that image. Choose a PNG, JPG, or GIF." }
     }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) { videoUri = uri; blurRect = BlurRect(); previewPositionMs = 0L; subtitlePreviewRestartKey++ }
+        if (uri != null) { videoUri = uri; previewPositionMs = 0L; subtitlePreviewRestartKey++ }
     }
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         audioUri = uri
@@ -255,6 +286,66 @@ private fun EditorScreen() {
         Spacer(Modifier.height(6.dp))
         Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) {
         SectionTitle("VIDEO")
+        SectionTitle("EDIT PRESETS · ХАДГАЛСАН ТОХИРГОО")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { presetMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(selectedPresetName ?: "Select saved preset", maxLines = 1)
+                }
+                DropdownMenu(expanded = presetMenuExpanded, onDismissRequest = { presetMenuExpanded = false }) {
+                    if (editingPresets.isEmpty()) {
+                        DropdownMenuItem(text = { Text("No saved settings yet") }, onClick = { presetMenuExpanded = false }, enabled = false)
+                    }
+                    editingPresets.forEach { (name, preset) ->
+                        DropdownMenuItem(text = { Text(name, maxLines = 1) }, onClick = {
+                            selectedPresetName = name
+                            presetMenuExpanded = false
+                            mirror = preset.mirror
+                            zoom = preset.zoom.coerceIn(1f, 1.18f)
+                            warmEnabled = preset.warmEnabled
+                            warmAmount = preset.warmAmount.coerceIn(0f, 1f)
+                            borderColorHex = preset.borderColorHex
+                            muteOriginal = preset.muteOriginal
+                            videoAudioVolume = preset.videoAudioVolume.coerceIn(0f, 1f)
+                            replacementAudioEnabled = preset.replacementAudioEnabled
+                            replacementAudioVolume = preset.replacementAudioVolume.coerceIn(0f, 1f)
+                            blurEnabled = preset.blurEnabled
+                            blurRect = preset.blurRect.copy(x = preset.blurRect.x.coerceIn(0f, 1f), y = preset.blurRect.y.coerceIn(0f, 1f), w = preset.blurRect.w.coerceIn(.16f, 1f), h = preset.blurRect.h.coerceIn(.06f, .35f))
+                            blurStrength = preset.blurStrength.coerceIn(.15f, 1f)
+                            logoPosition = preset.logoPosition
+                            logoScale = preset.logoScale.coerceIn(.4f, 2.2f)
+                            scrollingCaption = preset.scrollingCaption
+                            subtitleScript = preset.subtitleScript
+                            subtitleCues = if (preset.subtitleScript.isBlank()) emptyList() else runCatching { parseSubtitleScript(preset.subtitleScript) }.getOrDefault(emptyList())
+                            subtitleOffsetMs = preset.subtitleOffsetMs.coerceIn(-5000f, 5000f)
+                            subtitleFontSp = preset.subtitleFontSp.coerceIn(8f, 28f)
+                            subtitleColorHex = preset.subtitleColorHex
+                            subtitlePositionX = preset.subtitlePositionX.coerceIn(.08f, .92f)
+                            subtitlePositionY = preset.subtitlePositionY.coerceIn(.08f, .92f)
+                            prefs.edit().putFloat("logo_x", logoPosition.x).putFloat("logo_y", logoPosition.y).putFloat("logo_scale", logoScale)
+                                .putString("border_color", borderColorHex).putString("scrolling_caption", scrollingCaption).putString("subtitle_color", subtitleColorHex).apply()
+                            previewPositionMs = 0L
+                            subtitlePreviewRestartKey++
+                            message = "Loaded settings: $name"
+                        })
+                    }
+                }
+            }
+            if (selectedPresetName != null && editingPresets.containsKey(selectedPresetName)) {
+                IconButton(onClick = {
+                    val updated = LinkedHashMap(editingPresets)
+                    updated.remove(selectedPresetName)
+                    editingPresets = updated
+                    saveEditingPresets(prefs, updated)
+                    selectedPresetName = null
+                }) { Icon(Icons.Default.Close, "Delete selected preset", tint = Color(0xFFCF9DA6)) }
+            }
+            OutlinedButton(onClick = { presetNameInput = ""; showSavePresetDialog = true }) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Text(" Add")
+            }
+        }
+        Text("Profiles save edit settings, scrolling text and subtitles; selected video/audio files are not included.", color = Color(0xFF858BA0), fontSize = 11.sp)
         SettingSwitch("Mirror horizontally", "Flip the frame left-to-right", mirror) { mirror = it }
         Text("Slight zoom · ${"%.2f".format(zoom)}×", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
         Slider(value = zoom, onValueChange = { zoom = it }, valueRange = 1f..1.18f)
@@ -462,6 +553,41 @@ private fun EditorScreen() {
         }
     }
     message?.let { text -> AlertDialog(onDismissRequest = { message = null }, confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } }, title = { Text(if (text.startsWith("Video exported")) "Export complete" else "Notice") }, text = { Text(text) } ) }
+    if (showSavePresetDialog) AlertDialog(
+        onDismissRequest = { showSavePresetDialog = false },
+        title = { Text("Save editing settings") },
+        text = {
+            Column {
+                Text("Enter a name. Saving an existing name replaces its previous settings.", color = Color(0xFFA7ACBC))
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(value = presetNameInput, onValueChange = { presetNameInput = it }, singleLine = true, label = { Text("Preset name") }, placeholder = { Text("e.g. Warm portrait") })
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val name = presetNameInput.trim()
+                if (name.isBlank()) {
+                    showSavePresetDialog = false
+                    message = "Enter a name for these settings first."
+                } else {
+                    val preset = EditorPreset(
+                        mirror, zoom, warmEnabled, warmAmount, borderColorHex, muteOriginal, videoAudioVolume,
+                        replacementAudioEnabled, replacementAudioVolume, blurEnabled, blurRect, blurStrength,
+                        logoPosition, logoScale, scrollingCaption, subtitleScript, subtitleOffsetMs,
+                        subtitleFontSp, subtitleColorHex, subtitlePositionX, subtitlePositionY
+                    )
+                    val updated = LinkedHashMap(editingPresets)
+                    updated[name] = preset
+                    editingPresets = updated
+                    saveEditingPresets(prefs, updated)
+                    selectedPresetName = name
+                    showSavePresetDialog = false
+                    message = "Saved ‘$name’. Select it next time to restore these settings."
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = { showSavePresetDialog = false }) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -1053,6 +1179,85 @@ private fun copyBundledLogo(context: Context): File {
     check(target.isFile && target.length() > 0L) { "The built-in logo could not be loaded" }
     return target
 }
+
+private fun loadEditingPresets(prefs: android.content.SharedPreferences): LinkedHashMap<String, EditorPreset> {
+    val saved = LinkedHashMap<String, EditorPreset>()
+    val raw = prefs.getString("editing_presets", null) ?: return saved
+    runCatching {
+        val array = JSONArray(raw)
+        for (index in 0 until array.length()) runCatching {
+            val entry = array.getJSONObject(index)
+            val name = entry.optString("name", "").trim()
+            val settings = entry.optJSONObject("settings") ?: return@runCatching
+            if (name.isNotEmpty()) saved[name] = editorPresetFromJson(settings)
+        }
+    }
+    return saved
+}
+
+private fun saveEditingPresets(prefs: android.content.SharedPreferences, presets: Map<String, EditorPreset>) {
+    val array = JSONArray()
+    presets.forEach { (name, preset) ->
+        array.put(JSONObject().put("name", name).put("settings", editorPresetToJson(preset)))
+    }
+    prefs.edit().putString("editing_presets", array.toString()).apply()
+}
+
+private fun editorPresetToJson(preset: EditorPreset): JSONObject = JSONObject()
+    .put("mirror", preset.mirror)
+    .put("zoom", preset.zoom)
+    .put("warmEnabled", preset.warmEnabled)
+    .put("warmAmount", preset.warmAmount)
+    .put("borderColorHex", preset.borderColorHex)
+    .put("muteOriginal", preset.muteOriginal)
+    .put("videoAudioVolume", preset.videoAudioVolume)
+    .put("replacementAudioEnabled", preset.replacementAudioEnabled)
+    .put("replacementAudioVolume", preset.replacementAudioVolume)
+    .put("blurEnabled", preset.blurEnabled)
+    .put("blurX", preset.blurRect.x)
+    .put("blurY", preset.blurRect.y)
+    .put("blurW", preset.blurRect.w)
+    .put("blurH", preset.blurRect.h)
+    .put("blurStrength", preset.blurStrength)
+    .put("logoX", preset.logoPosition.x)
+    .put("logoY", preset.logoPosition.y)
+    .put("logoScale", preset.logoScale)
+    .put("scrollingCaption", preset.scrollingCaption)
+    .put("subtitleScript", preset.subtitleScript)
+    .put("subtitleOffsetMs", preset.subtitleOffsetMs)
+    .put("subtitleFontSp", preset.subtitleFontSp)
+    .put("subtitleColorHex", preset.subtitleColorHex)
+    .put("subtitlePositionX", preset.subtitlePositionX)
+    .put("subtitlePositionY", preset.subtitlePositionY)
+
+private fun editorPresetFromJson(json: JSONObject): EditorPreset = EditorPreset(
+    mirror = json.optBoolean("mirror", false),
+    zoom = json.optDouble("zoom", 1.08).toFloat().coerceIn(1f, 1.18f),
+    warmEnabled = json.optBoolean("warmEnabled", true),
+    warmAmount = json.optDouble("warmAmount", .3).toFloat().coerceIn(0f, 1f),
+    borderColorHex = json.optString("borderColorHex", "#9C7BFF"),
+    muteOriginal = json.optBoolean("muteOriginal", true),
+    videoAudioVolume = json.optDouble("videoAudioVolume", .8).toFloat().coerceIn(0f, 1f),
+    replacementAudioEnabled = json.optBoolean("replacementAudioEnabled", true),
+    replacementAudioVolume = json.optDouble("replacementAudioVolume", .9).toFloat().coerceIn(0f, 1f),
+    blurEnabled = json.optBoolean("blurEnabled", true),
+    blurRect = BlurRect(
+        json.optDouble("blurX", .22).toFloat().coerceIn(0f, 1f),
+        json.optDouble("blurY", .70).toFloat().coerceIn(0f, 1f),
+        json.optDouble("blurW", .56).toFloat().coerceIn(.16f, 1f),
+        json.optDouble("blurH", .11).toFloat().coerceIn(.06f, .35f)
+    ),
+    blurStrength = json.optDouble("blurStrength", .92).toFloat().coerceIn(.15f, 1f),
+    logoPosition = LogoPosition(json.optDouble("logoX", .86).toFloat(), json.optDouble("logoY", .92).toFloat()),
+    logoScale = json.optDouble("logoScale", 1.0).toFloat().coerceIn(.4f, 2.2f),
+    scrollingCaption = json.optString("scrollingCaption", ""),
+    subtitleScript = json.optString("subtitleScript", ""),
+    subtitleOffsetMs = json.optDouble("subtitleOffsetMs", 0.0).toFloat().coerceIn(-5000f, 5000f),
+    subtitleFontSp = json.optDouble("subtitleFontSp", 12.0).toFloat().coerceIn(8f, 28f),
+    subtitleColorHex = json.optString("subtitleColorHex", "#FFFFFF"),
+    subtitlePositionX = json.optDouble("subtitlePositionX", .5).toFloat().coerceIn(.08f, .92f),
+    subtitlePositionY = json.optDouble("subtitlePositionY", .83).toFloat().coerceIn(.08f, .92f)
+)
 
 private fun decodeLogoPreview(file: File): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
