@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,7 +94,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -106,7 +110,7 @@ private const val OUTPUT_VIDEO_BITRATE = 1_200_000
 private const val OUTPUT_AUDIO_BITRATE = 96_000
 private data class BlurRect(val x: Float = .22f, val y: Float = .70f, val w: Float = .56f, val h: Float = .11f)
 private data class LogoPosition(val x: Float = .86f, val y: Float = .92f)
-private data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
+internal data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
 private data class EditorPreset(
     val mirror: Boolean,
     val zoom: Float,
@@ -142,6 +146,7 @@ class MainActivity : ComponentActivity() {
 private fun EditorScreen() {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val screenScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("video_editing", Context.MODE_PRIVATE) }
     val logoPrefsInitialized = remember(prefs) {
         if (!prefs.getBoolean("china_ai_default_logo_v1", false)) {
@@ -182,6 +187,11 @@ private fun EditorScreen() {
     var subtitlePositionX by remember { mutableFloatStateOf(.5f) }
     var subtitlePositionY by remember { mutableFloatStateOf(.83f) }
     var subtitlePreviewRestartKey by remember { mutableIntStateOf(0) }
+    val naraSar = remember(context) { NaraSarTranscriber(context) }
+    var naraModelReady by remember { mutableStateOf(naraSar.isModelInstalled()) }
+    var naraDownloading by remember { mutableStateOf(false) }
+    var naraDownloadProgress by remember { mutableFloatStateOf(0f) }
+    var naraTranscribing by remember { mutableStateOf(false) }
     var previewCanvasWidthPx by remember { mutableFloatStateOf(0f) }
     var previewPositionMs by remember { mutableLongStateOf(0L) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -391,6 +401,57 @@ private fun EditorScreen() {
                     .onFailure { message = it.message ?: "Check the subtitle line format and timing." }
             }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(13.dp)) { Text("Apply subtitles") }
             OutlinedButton(onClick = { subtitlePicker.launch(arrayOf("text/plain", "application/x-subrip", "text/srt", "*/*")) }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(13.dp)) { Text("Import .txt / .srt") }
+        }
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF242033)).padding(12.dp)) {
+            Text("BURMESE AUTO-SUBTITLES", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(
+                if (audioUri == null) "Add replacement audio below first. The selected added audio will be transcribed on this device."
+                else if (!naraModelReady) "Download the Nara SAR Burmese speech engine after installing the APK (about 450 MB)."
+                else "Ready to transcribe the selected added audio offline. Review the generated timing and text before export.",
+                color = Color(0xFFB9B1CC), fontSize = 11.sp
+            )
+            Spacer(Modifier.height(7.dp))
+            if (!naraModelReady) {
+                Button(
+                    enabled = !naraDownloading,
+                    onClick = {
+                        naraDownloading = true
+                        naraDownloadProgress = 0f
+                        screenScope.launch {
+                            runCatching {
+                                naraSar.downloadModel { value -> naraDownloadProgress = value }
+                            }.onSuccess {
+                                naraModelReady = true
+                                message = "Burmese subtitle engine downloaded. You can now generate subtitles from added audio."
+                            }.onFailure { message = it.message ?: "Could not download the Burmese subtitle engine." }
+                            naraDownloading = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(13.dp)
+                ) { Text(if (naraDownloading) "Downloading ${(naraDownloadProgress * 100).roundToInt()}%" else "Download Burmese subtitle engine") }
+            } else {
+                Button(
+                    enabled = audioUri != null && !naraTranscribing,
+                    onClick = {
+                        val selectedAudio = audioUri ?: return@Button
+                        naraTranscribing = true
+                        screenScope.launch {
+                            runCatching { naraSar.transcribe(selectedAudio) }
+                                .onSuccess { cues ->
+                                    subtitleCues = cues
+                                    subtitleScript = cues.joinToString("\n") { cue -> "[${formatSubtitleTime(cue.startMs)} - ${formatSubtitleTime(cue.endMs)}] ${cue.text}" }
+                                    previewPositionMs = 0L
+                                    subtitlePreviewRestartKey++
+                                    message = "Generated ${cues.size} Burmese subtitle lines from the added audio. Please review the text before export."
+                                }
+                                .onFailure { message = it.message ?: "Could not transcribe the added audio." }
+                            naraTranscribing = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(13.dp)
+                ) { Text(if (naraTranscribing) "Generating Burmese subtitles…" else "Generate subtitles from added audio") }
+            }
+            Text("Powered by Nara SAR · Apache-2.0 · offline CPU inference", color = Color(0xFF85809A), fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
         }
         if (subtitleCues.isNotEmpty()) {
             Text("${subtitleCues.size} subtitle lines loaded · edit the text above, then Apply again", color = Color(0xFFA7ACBC), fontSize = 11.sp)
@@ -1351,3 +1412,11 @@ private fun parseSrtText(raw: String): List<SubtitleCue> {
 
 private fun activeSubtitleCue(cues: List<SubtitleCue>, timeMs: Long, offsetMs: Long): SubtitleCue? =
     cues.firstOrNull { timeMs >= it.startMs + offsetMs && timeMs < it.endMs + offsetMs }
+
+private fun formatSubtitleTime(milliseconds: Long): String {
+    val safe = milliseconds.coerceAtLeast(0L)
+    val minutes = safe / 60_000L
+    val seconds = (safe % 60_000L) / 1_000L
+    val millis = safe % 1_000L
+    return "%02d:%02d.%01d".format(minutes, seconds, millis / 100L)
+}
