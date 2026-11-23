@@ -26,7 +26,9 @@ internal class NaraSarTranscriber(private val context: Context) {
         private const val MODEL_URL = "https://huggingface.co/yelin201875/nara-sar/resolve/main/onnx/acoustic.onnx?download=true"
         private const val METADATA_URL = "https://huggingface.co/yelin201875/nara-sar/resolve/main/sar.json?download=true"
         private const val SAMPLE_RATE = 16_000
-        private const val CHUNK_SAMPLES = 160_000
+        // Generate a short subtitle cue every three seconds so captions change frequently
+        // and remain readable on the vertical video canvas.
+        private const val CHUNK_SAMPLES = 48_000
         private const val MAX_AUDIO_BYTES = 256L * 1024L * 1024L
     }
 

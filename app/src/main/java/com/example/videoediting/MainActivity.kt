@@ -439,6 +439,7 @@ private fun EditorScreen() {
                             runCatching { naraSar.transcribe(selectedAudio) }
                                 .onSuccess { cues ->
                                     subtitleCues = cues
+                                    subtitleColorHex = "#FFFFFF"
                                     subtitleScript = cues.joinToString("\n") { cue -> "[${formatSubtitleTime(cue.startMs)} - ${formatSubtitleTime(cue.endMs)}] ${cue.text}" }
                                     previewPositionMs = 0L
                                     subtitlePreviewRestartKey++
@@ -922,9 +923,7 @@ private fun InteractiveTimedSubtitle(
                 typeface = Typeface.create("sans-serif", Typeface.BOLD)
             }
             val maxTextWidth = (canvasWidthPx * .78f).coerceAtLeast(1f)
-            wrapSubtitleText(text, paint, maxTextWidth).let { lines ->
-                (if (lines.size <= 2) lines else listOf(lines.first(), lines.drop(1).joinToString(" "))).joinToString("\n")
-            }
+            wrapSubtitleText(text, paint, maxTextWidth).joinToString("\n")
         }
         val currentX = rememberUpdatedState(positionX)
         val currentY = rememberUpdatedState(positionY)
@@ -957,6 +956,7 @@ private fun InteractiveTimedSubtitle(
                     }
                 }
         ) {
+            Box(Modifier.clip(RoundedCornerShape(5.dp)).background(Color(0xFF3569B8)).padding(horizontal = 8.dp, vertical = 4.dp)) {
             Text(
                 text = displayText,
                 color = Color(AndroidColor.parseColor(textColorHex)),
@@ -967,9 +967,10 @@ private fun InteractiveTimedSubtitle(
                 style = androidx.compose.ui.text.TextStyle(
                     shadow = androidx.compose.ui.graphics.Shadow(outlineColor, Offset.Zero, outlineBlurPx)
                 ),
-                maxLines = 2,
+                maxLines = 8,
                 softWrap = true
             )
+            }
         }
     }
 }
@@ -1046,9 +1047,7 @@ private class TimedSubtitleOverlay(
         val timeMs = presentationTimeUs.coerceAtLeast(0L) / 1_000L
         val cue = activeSubtitleCue(cues, timeMs, offsetMs) ?: return bitmap
         val maxTextWidth = OUTPUT_WIDTH * .78f
-        val lines = wrapSubtitleText(cue.text, paint, maxTextWidth).let { wrapped ->
-            if (wrapped.size <= 2) wrapped else listOf(wrapped.first(), wrapped.drop(1).joinToString(" "))
-        }
+        val lines = wrapSubtitleText(cue.text, paint, maxTextWidth)
         val lineHeight = paint.textSize * 1.18f
         val centerX = horizontalPosition.coerceIn(.08f, .92f) * OUTPUT_WIDTH
         val centerY = verticalPosition.coerceIn(.1f, .95f) * OUTPUT_HEIGHT
@@ -1056,6 +1055,9 @@ private class TimedSubtitleOverlay(
         val top = centerY - textBlockHeight / 2f
         val metrics = paint.fontMetrics
         val firstBaseline = top + (lineHeight - (metrics.descent - metrics.ascent)) / 2f - metrics.ascent
+        val widestLine = lines.maxOfOrNull { paint.measureText(it) } ?: 0f
+        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(53, 105, 184) }
+        canvas.drawRoundRect(RectF(centerX - widestLine / 2f - 18f, top - 8f, centerX + widestLine / 2f + 18f, top + textBlockHeight + 8f), 10f, 10f, background)
         lines.forEachIndexed { index, line ->
             val baseline = firstBaseline + index * lineHeight
             canvas.drawText(line, centerX, baseline, outlinePaint)
@@ -1074,8 +1076,20 @@ private fun wrapSubtitleText(text: String, paint: Paint, maxWidth: Float): List<
     var current = ""
     for (word in words) {
         val candidate = if (current.isEmpty()) word else "$current $word"
-        if (current.isNotEmpty() && paint.measureText(candidate) > maxWidth) { lines += current; current = word }
-        else current = candidate
+        if (paint.measureText(candidate) <= maxWidth) {
+            current = candidate
+            continue
+        }
+        if (current.isNotEmpty()) { lines += current; current = "" }
+        var piece = ""
+        for (character in word) {
+            val next = piece + character
+            if (piece.isNotEmpty() && paint.measureText(next) > maxWidth) {
+                lines += piece
+                piece = character.toString()
+            } else piece = next
+        }
+        current = piece
     }
     if (current.isNotEmpty()) lines += current
     return lines
